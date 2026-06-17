@@ -1,0 +1,239 @@
+import { Link, useLocation } from "wouter";
+import { useEffect, useState } from "react";
+import { useAuth } from "../auth/AuthProvider";
+import { 
+  Hotel,
+  Moon,
+  Sun
+} from "lucide-react";
+import { cn } from "@/lib/utils";
+import { TitleBar } from "./TitleBar";
+
+
+const DashboardIcon = ({ className }: { className?: string }) => (
+  <svg 
+    xmlns="http://www.w3.org/2000/svg" 
+    viewBox="0 0 24 24"
+    className={className}
+  >
+    <path 
+      fill="currentColor" 
+      d="M15.21 2H8.75A6.76 6.76 0 0 0 2 8.75v6.5A6.76 6.76 0 0 0 8.75 22h6.5A6.76 6.76 0 0 0 22 15.25v-6.5A6.76 6.76 0 0 0 15.21 2m1.89 10.69h-.14a.76.76 0 0 1-.74-.62l-.18-1l-1.31 2a1.71 1.71 0 0 1-2.32.5l-2.27-1.44a.18.18 0 0 0-.13 0a.2.2 0 0 0-.13.08L7.56 15.3a.77.77 0 0 1-.6.3a.74.74 0 0 1-.45-.15a.75.75 0 0 1-.15-1l2.32-3.09a1.71 1.71 0 0 1 2.25-.43l2.28 1.44a.23.23 0 0 0 .28-.06l1.34-2l-1.08.15a.753.753 0 0 1-.28-1.48l2.76-.51h.36a.12.12 0 0 1 .08 0l.15.08l.15.12q.054.065.09.14a.5.5 0 0 1 .06.15l.52 2.8a.75.75 0 0 1-.54.93" 
+    />
+  </svg>
+);
+
+const RoomsIcon = ({ className }: { className?: string }) => (
+  <svg 
+    xmlns="http://www.w3.org/2000/svg" 
+    viewBox="0 0 24 24"
+    className={className}
+  >
+    <path fill="currentColor" d="M16.5 12h-9c-.55 0-1 .45-1 1v1h11v-1c0-.55-.45-1-1-1M7.25 8.5h4v2h-4zm5.5 0h4v2h-4z" />
+    <path fill="currentColor" d="M20 2H4c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2m-1 15h-1.5v-1.5h-11V17H5v-3.83c0-.66.25-1.26.65-1.72V9c0-1.1.9-2 2-2H11c.37 0 .72.12 1 .32c.28-.2.63-.32 1-.32h3.35c1.1 0 2 .9 2 2v2.45c.4.46.65 1.06.65 1.72z" />
+  </svg>
+);
+
+const GuestsIcon = ({ className }: { className?: string }) => (
+  <svg 
+    xmlns="http://www.w3.org/2000/svg" 
+    viewBox="0 0 12 12"
+    className={className}
+  >
+    <path 
+      fill="currentColor" 
+      d="M4.25 3.25a1.75 1.75 0 1 1 3.5 0a1.75 1.75 0 0 1-3.5 0m-2 2.25a1.25 1.25 0 1 0 0-2.5a1.25 1.25 0 0 0 0 2.5M11 4.25a1.25 1.25 0 1 1-2.5 0a1.25 1.25 0 0 1 2.5 0M5.25 6C4.56 6 4 6.56 4 7.25V8.5a2 2 0 1 0 4 0V7.25C8 6.56 7.44 6 6.75 6zM3 7.25c0-.289.054-.565.154-.818l-1.231.33a1.25 1.25 0 0 0-.884 1.53l.194.725a2 2 0 0 0 2.45 1.414l.017-.005A3 3 0 0 1 3 8.5zM9 8.5c0 .733-.263 1.405-.7 1.927l.016.004a2 2 0 0 0 2.449-1.414l.194-.725a1.25 1.25 0 0 0-.884-1.53l-1.228-.33c.099.254.153.53.153.818z" 
+    />
+  </svg>
+);
+
+const BillingIcon = ({ className }: { className?: string }) => (
+  <svg 
+    xmlns="http://www.w3.org/2000/svg" 
+    viewBox="0 0 24 24"
+    className={className}
+  >
+    <g fill="none" fillRule="evenodd">
+      <path d="m12.594 23.258l-.012.002l-.071.035l-.02.004l-.014-.004l-.071-.036q-.016-.004-.024.006l-.004.01l-.017.428l.005.02l.01.013l.104.074l.015.004l.012-.004l.104-.074l.012-.016l.004-.017l-.017-.427q-.004-.016-.016-.018m.264-.113l-.014.002l-.184.093l-.01.01l-.003.011l.018.43l.005.012l.008.008l.201.092q.019.005.029-.008l.004-.014l-.034-.614q-.005-.019-.02-.022m-.715.002a.02.02 0 0 0-.027.006l-.006.014l-.034.614q.001.018.017.024l.015-.002l.201-.093l.01-.008l.003-.011l.018-.43l-.003-.012l-.01-.01z" />
+      <path fill="currentColor" d="M18 3a3 3 0 0 1 2.995 2.824L21 6v14a1 1 0 0 1-1.405.914l-.12-.062l-2.725-1.678l-2.726 1.678a1 1 0 0 1-.938.058l-.11-.058l-2.726-1.678l-2.726 1.678a1 1 0 0 1-1.517-.732L6 20v-6H4a1 1 0 0 1-.993-.883L3 13V5.5a2.5 2.5 0 0 1 2.336-2.495L5.5 3zm-3 9h-4a1 1 0 1 0 0 2h4a1 1 0 1 0 0-2M5.5 5a.5.5 0 0 0-.5.5V12h1V5.5a.5.5 0 0 0-.5-.5M16 8h-5a1 1 0 0 0-.117 1.993L11 10h5a1 1 0 0 0 .117-1.993z" />
+    </g>
+  </svg>
+);
+
+const ReportsIcon = ({ className }: { className?: string }) => (
+  <svg 
+    xmlns="http://www.w3.org/2000/svg" 
+    viewBox="0 0 48 48"
+    className={className}
+  >
+    <path 
+      fill="currentColor" 
+      fillRule="evenodd" 
+      d="M9.646 2.191C12.526 1.855 17.181 1.5 24 1.5c1.985 0 3.787.03 5.415.081a1.5 1.5 0 0 1 .399.067c1.146.357 4.227 1.633 8.538 5.837c4.062 3.961 5.464 6.864 5.923 8.135q.078.22.088.453c.084 2.261.137 4.89.137 7.927c0 8.11-.377 13.307-.726 16.384c-.33 2.899-2.532 5.088-5.42 5.425c-2.88.336-7.536.691-14.354.691s-11.475-.355-14.354-.691c-2.888-.337-5.09-2.526-5.42-5.425C3.876 37.307 3.5 32.11 3.5 24s.377-13.307.726-16.384c.33-2.899 2.532-5.088 5.42-5.425M13 39.75a1.75 1.75 0 1 1 0-3.5h22a1.75 1.75 0 1 1 0 3.5zM11.25 31c0-.966.784-1.75 1.75-1.75h22a1.75 1.75 0 1 1 0 3.5H13A1.75 1.75 0 0 1 11.25 31m16.197-19.796a26.6 26.6 0 0 1 5.718-.44a2.14 2.14 0 0 1 2.072 2.071a26.7 26.7 0 0 1-.441 5.718c-.346 1.826-2.526 2.303-3.717 1.113l-1.139-1.14l-.236.207a36 36 0 0 0-1.099 1.008c-.898.86-2.027 2.023-3.002 3.28c-.734.946-1.868 1.222-2.792 1.08c-.931-.145-1.963-.77-2.33-1.974c-.366-1.194-.83-2.577-1.316-3.704c-1.054.795-2.719 2.375-4.7 5.403a1.75 1.75 0 0 1-2.93-1.916c2.689-4.108 5.01-6.032 6.445-6.914c1.509-.926 3.3-.246 4.006 1.186c.568 1.152 1.093 2.596 1.511 3.877a37 37 0 0 1 2.69-2.847c.486-.466.906-.844 1.205-1.107l.067-.06l-1.124-1.124c-1.191-1.19-.714-3.37 1.112-3.717" 
+      clipRule="evenodd" 
+    />
+  </svg>
+);
+
+const UsersIcon = ({ className }: { className?: string }) => (
+  <svg 
+    xmlns="http://www.w3.org/2000/svg" 
+    viewBox="0 0 640 640"
+    className={className}
+  >
+    <path 
+      fill="currentColor" 
+      d="M96 96c-35.3 0-64 28.7-64 64v320c0 35.3 28.7 64 64 64h448c35.3 0 64-28.7 64-64V160c0-35.3-28.7-64-64-64zm224 72c30.9 0 56 25.1 56 56s-25.1 56-56 56s-56-25.1-56-56s25.1-56 56-56m0 152c53 0 96 43 96 96v24c0 13.3-10.7 24-24 24H248c-13.3 0-24-10.7-24-24v-24c0-53 43-96 96-96m96-64c0-26.5 21.5-48 48-48s48 21.5 48 48s-21.5 48-48 48s-48-21.5-48-48m-216 80.3c-15.2 22.8-24 50.2-24 79.7v24c0 8.4 1.4 16.5 4.1 24h-46.8c-11.7 0-21.3-9.6-21.3-21.3V432c0-50.3 38.7-91.6 88-95.7M459.9 464c2.7-7.5 4.1-15.6 4.1-24v-24c0-29.5-8.8-56.9-24-79.7c49.3 4.1 88 45.3 88 95.7v10.7c0 11.8-9.6 21.3-21.3 21.3zM128 256c0-26.5 21.5-48 48-48s48 21.5 48 48s-21.5 48-48 48s-48-21.5-48-48" 
+    />
+  </svg>
+);
+
+const SettingsIcon = ({ className }: { className?: string }) => (
+  <svg 
+    xmlns="http://www.w3.org/2000/svg" 
+    viewBox="0 0 24 24"
+    className={className}
+  >
+    <path 
+      fill="currentColor" 
+      d="M12 10c-1.1 0-2 .9-2 2s.9 2 2 2s2-.9 2-2s-.9-2-2-2m7-7H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2m-1.75 9c0 .23-.02.46-.05.68l1.48 1.16c.13.11.17.3.08.45l-1.4 2.42c-.09.15-.27.21-.43.15l-1.74-.7c-.36.28-.76.51-1.18.69l-.26 1.85c-.03.17-.18.3-.35.3h-2.8c-.17 0-.32-.13-.35-.29l-.26-1.85c-.43-.18-.82-.41-1.18-.69l-1.74.7c-.16.06-.34 0-.43-.15l-1.4-2.42a.35.35 0 0 1 .08-.45l1.48-1.16c-.03-.23-.05-.46-.05-.69s.02-.46.05-.68l-1.48-1.16a.35.35 0 0 1-.08-.45l1.4-2.42c.09-.15.27-.21.43-.15l1.74.7c.36-.28.76-.51 1.18-.69l.26-1.85c.03-.17.18-.3.35-.3h2.8c.17 0 .32.13.35.29l.26 1.85c.43.18.82.41 1.18.69l1.74-.7c.16-.06.34 0 .43.15l1.4 2.42c.09.15.05.34-.08.45l-1.48 1.16c.03.23.05.46.05.69" 
+    />
+  </svg>
+);
+
+const LogoutIcon = ({ className }: { className?: string }) => (
+  <svg 
+    xmlns="http://www.w3.org/2000/svg" 
+    viewBox="0 0 14 14"
+    className={className}
+  >
+    <path 
+      fill="currentColor" 
+      fillRule="evenodd" 
+      d="M0 1.5A1.5 1.5 0 0 1 1.5 0h7A1.5 1.5 0 0 1 10 1.5v1.939a2 2 0 0 0-.734 1.311H5.75a2.25 2.25 0 1 0 0 4.5h3.516A2 2 0 0 0 10 10.561V12.5A1.5 1.5 0 0 1 8.5 14h-7A1.5 1.5 0 0 1 0 12.5zm10.963 2.807A.75.75 0 0 0 10.5 5v1H5.75a1 1 0 0 0 0 2h4.75v1a.75.75 0 0 0 1.28.53l2-2a.75.75 0 0 0 0-1.06l-2-2a.75.75 0 0 0-.817-.163" 
+      clipRule="evenodd" 
+    />
+  </svg>
+);
+
+export function SidebarLayout({ children }: { children: React.ReactNode }) {
+
+  const [location] = useLocation();
+  const { user, logout } = useAuth();
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
+  const runtime = window.__PMS_RUNTIME__;
+  const showHostOfflineWarning = runtime?.mode === "client" && !runtime.hostReachable;
+
+  useEffect(() => {
+    const savedTheme = localStorage.getItem("palawansu_theme");
+    const systemPrefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    const shouldUseDark = savedTheme ? savedTheme === "dark" : systemPrefersDark;
+
+    document.documentElement.classList.toggle("dark", shouldUseDark);
+    setIsDarkMode(shouldUseDark);
+  }, []);
+
+  const toggleTheme = () => {
+    const nextThemeIsDark = !isDarkMode;
+    setIsDarkMode(nextThemeIsDark);
+    document.documentElement.classList.toggle("dark", nextThemeIsDark);
+    localStorage.setItem("palawansu_theme", nextThemeIsDark ? "dark" : "light");
+  };
+
+  const navigation = [
+    { name: "Dashboard", href: "/dashboard", icon: DashboardIcon },
+    { name: "Guests & stays", href: "/guests", icon: GuestsIcon },
+    { name: "Rooms", href: "/rooms", icon: RoomsIcon },
+    { name: "Billing", href: "/billing", icon: BillingIcon },
+    { name: "Reports", href: "/reports", icon: ReportsIcon },
+    ...(user?.role === "admin" ? [
+      { name: "Users", href: "/users", icon: UsersIcon },
+      { name: "Settings", href: "/settings", icon: SettingsIcon },
+    ] : [])
+  ];
+
+  return (
+    <div className="flex flex-col h-[100dvh] w-full overflow-hidden bg-background">
+      <TitleBar />
+      <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden p-3 pt-2">
+      <div className="w-[280px] bg-sidebar text-sidebar-foreground flex flex-col rounded-2xl border border-sidebar-border shadow-[0_20px_80px_rgba(0,0,0,0.22)]">
+        <div className="p-4 flex items-center gap-3 border-b border-sidebar-border/80">
+          <div className="h-10 w-10 rounded-xl flex items-center justify-center bg-white shadow-sm overflow-hidden p-1">
+            <img src="logo.png" alt="PalawanSU Hotel Logo" className="w-full h-full object-contain" />
+          </div>
+          <div className="flex flex-col">
+            <span className="font-bold text-[15px] tracking-tight text-sidebar-foreground leading-tight">PalawanSU Hotel</span>
+            <span className="text-[10px] text-sidebar-foreground/65 tracking-[0.18em] uppercase">Property Management</span>
+          </div>
+        </div>
+        {showHostOfflineWarning && (
+          <div className="mx-3 mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-[11px] text-amber-100">
+            Host server is offline. This client is read-only/unavailable until host returns.
+          </div>
+        )}
+
+        <div className="px-3 py-3 mt-1 flex flex-col gap-1 flex-1 overflow-y-auto">
+          {navigation.map((item) => {
+            const locPath = location.split("?")[0] ?? location;
+            const isGuestsHub = item.href === "/guests";
+            const isActive = isGuestsHub
+              ? locPath === "/guests" || locPath === "/checkin" || locPath === "/reservations"
+              : locPath === item.href || location.startsWith(`${item.href}/`);
+            return (
+              <Link key={item.name} href={item.href}>
+                <div className={cn(
+                  "group flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13px] font-medium transition-all duration-200 cursor-pointer border",
+                  isActive 
+                    ? "bg-sidebar-primary text-sidebar-primary-foreground border-sidebar-primary shadow-[0_0_12px_rgba(255,68,0,0.25)]" 
+                    : "text-sidebar-foreground/78 border-transparent hover:bg-sidebar-accent hover:text-sidebar-accent-foreground hover:border-sidebar-border"
+                )}>
+                  <item.icon className={cn("h-[24px] w-[24px] shrink-0", isActive ? "text-sidebar-primary-foreground" : "text-sidebar-foreground/60 group-hover:text-sidebar-foreground")} />
+                  {item.name}
+                </div>
+              </Link>
+            );
+          })}
+        </div>
+
+        <div className="p-3 border-t border-sidebar-border mt-auto">
+          <button
+            onClick={toggleTheme}
+            className="w-full mb-2 flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg border border-sidebar-border bg-sidebar-accent/45 hover:bg-sidebar-accent transition-colors text-xs font-medium"
+          >
+            <span className="text-sidebar-foreground/80">{isDarkMode ? "Dark Mode" : "Light Mode"}</span>
+            <span className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-sidebar text-sidebar-foreground">
+              {isDarkMode ? <Moon className="h-3.5 w-3.5" /> : <Sun className="h-3.5 w-3.5" />}
+            </span>
+          </button>
+
+          <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg mb-2 bg-sidebar-accent/55 border border-sidebar-border/70">
+            <div className="h-8 w-8 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold text-sm">
+              {user?.fullName?.charAt(0) || user?.username?.charAt(0) || "U"}
+            </div>
+            <div className="flex flex-col flex-1 overflow-hidden">
+              <span className="text-sm font-medium text-sidebar-foreground truncate">{user?.fullName || user?.username || "User"}</span>
+              <span className="text-[11px] text-sidebar-foreground/60 capitalize">{user?.role || "Guest"}</span>
+            </div>
+          </div>
+          <button 
+            onClick={() => logout()}
+            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-sidebar-foreground/80 hover:bg-destructive/10 hover:text-destructive w-full transition-colors border border-transparent hover:border-destructive/30"
+          >
+            <LogoutIcon className="h-[24px] w-[24px] opacity-70" />
+            Sign Out
+          </button>
+        </div>
+      </div>
+
+      <main className="flex-1 flex min-h-0 min-w-0 flex-col overflow-hidden bg-background rounded-2xl border border-border/70 ml-3">
+        <div className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden p-4 sm:p-5 md:p-6">
+          {/* Below xl: keep a readable max width; xl+: use the full main pane (≥~80% of viewport beside sidebar). */}
+          <div className="mx-auto h-full w-full min-w-0 max-w-7xl xl:mx-0 xl:max-w-none">
+            {children}
+          </div>
+        </div>
+      </main>
+      </div>
+    </div>
+  );
+}
