@@ -8,6 +8,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
+    "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy -- --keep-vars",
+    "upload": "opennextjs-cloudflare build && opennextjs-cloudflare upload -- --keep-vars",
+    "cf-typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts",
     "dev:vite": "vite --config vite.config.ts --host 0.0.0.0",
     "seed:fakes": "npm --prefix \"../PalawanSU Hotel/palsu-hotel-server\" run seed:fakes",
     "dev:all": "concurrently \"npm --prefix \\\"../PalawanSU Hotel/palsu-hotel-server\\\" run dev\" \"npm run electron:dev\"",
@@ -23,6 +27,7 @@
     "electron:pack": "electron-builder --dir"
   },
   "dependencies": {
+    "@opennextjs/cloudflare": "^1.20.2",
     "@supabase/ssr": "^0.12.4",
     "@supabase/supabase-js": "^2.112.2",
     "geist": "^1.7.2",
@@ -172,6 +177,7 @@
     "vite": "^7.3.0",
     "wait-on": "^8.0.3",
     "wouter": "^3.3.5",
+    "wrangler": "^4.121.0",
     "zod": "^3.25.76"
   }
 }

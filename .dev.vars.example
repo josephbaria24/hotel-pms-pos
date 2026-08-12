@@ -1,0 +1,6 @@
+# Local Workers / OpenNext runtime env (do not commit secrets)
+NEXTJS_ENV=development
+
+# Copy from .env.local for `npm run preview`
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=

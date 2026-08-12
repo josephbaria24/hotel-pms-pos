@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 import path from "path";
 import { fileURLToPath } from "url";
+import { initOpenNextCloudflareForDev } from "@opennextjs/cloudflare";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -26,3 +27,5 @@ const nextConfig: NextConfig = {
 };
 
 export default nextConfig;
+
+initOpenNextCloudflareForDev();

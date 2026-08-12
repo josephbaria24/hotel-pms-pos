@@ -356,7 +356,11 @@ export default function Settings() {
                 clearTimeout(timeoutId);
 
                 if (res.ok) {
-                  const data = await res.json();
+                  const data = (await res.json()) as {
+                    serverConnected?: unknown;
+                    databaseConnected?: unknown;
+                    hostActive?: unknown;
+                  };
                   if (data && (data.serverConnected !== undefined || data.databaseConnected !== undefined || data.hostActive !== undefined)) {
                     return targetIp;
                   }

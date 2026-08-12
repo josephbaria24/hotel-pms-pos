@@ -23,6 +23,8 @@
   },
   "include": [
     "next-env.d.ts",
+    "cloudflare-env.d.ts",
+    "open-next.config.ts",
     "src/app/**/*",
     "src/components/**/*",
     "src/hooks/**/*",
