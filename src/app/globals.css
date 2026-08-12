@@ -117,7 +117,7 @@
 
   --app-font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   --app-font-serif: Georgia, serif;
-  --app-font-mono: Menlo, monospace;
+  --app-font-mono: var(--font-geist-mono), ui-monospace, monospace;
   --radius: 0.5rem;
 }
 
@@ -184,4 +184,36 @@
 /* Sileo mounts viewports with [data-sileo-viewport]; keep above Radix Dialog (z-50) and other overlays */
 [data-sileo-viewport] {
   z-index: 99999 !important;
+}
+
+.hover-elevate:hover,
+.hover-elevate-2:hover {
+  filter: brightness(1.05);
+}
+
+.active-elevate-2:active {
+  filter: brightness(0.96);
+}
+
+/* POS mode sidebar — teal/slate vs PMS navy/orange */
+.sidebar-pos {
+  --sidebar: 173 45% 12%;
+  --sidebar-foreground: 166 30% 96%;
+  --sidebar-border: 173 30% 18%;
+  --sidebar-primary: 173 80% 36%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-accent: 173 28% 16%;
+  --sidebar-accent-foreground: 166 30% 96%;
+  --sidebar-ring: 173 80% 40%;
+}
+
+.dark .sidebar-pos {
+  --sidebar: 173 40% 9%;
+  --sidebar-foreground: 166 25% 95%;
+  --sidebar-border: 173 25% 15%;
+  --sidebar-primary: 173 75% 38%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-accent: 173 25% 13%;
+  --sidebar-accent-foreground: 166 25% 95%;
+  --sidebar-ring: 173 75% 42%;
 }

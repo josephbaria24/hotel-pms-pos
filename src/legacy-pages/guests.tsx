@@ -50,8 +50,8 @@ import {
 import { Search, Plus, BookUser, MoreHorizontal, Eye, Pencil, Trash2 } from "lucide-react";
 import { ScrollableTablePane } from "@/components/layout/ScrollableTablePane";
 import { cn } from "@/lib/utils";
-import Reservations from "@/pages/reservations";
-import CheckInOut from "@/pages/checkin";
+import Reservations from "@/legacy-pages/reservations";
+import CheckInOut from "@/legacy-pages/checkin";
 import { useToast } from "@/hooks/use-toast";
 
 type GuestTab = "directory" | "bookings" | "stays";

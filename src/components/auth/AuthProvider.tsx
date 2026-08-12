@@ -1,93 +1,124 @@
-import { createContext, useContext, useEffect, useState } from "react";
-import { useLocation } from "wouter";
-import { useLogout } from "@workspace/api-client-react";
-import type { User } from "@workspace/api-client-react";
-import { Loader2 } from "lucide-react";
+"use client";
 
-const STORAGE_KEY = "palawansu_user";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+import { useRouter } from "next/navigation";
+import { Loader2 } from "lucide-react";
+import { createClient } from "@/lib/supabase/client";
+import type { User } from "@/lib/api-client";
 
 interface AuthContextType {
   user: User | null;
   isLoading: boolean;
   setUser: (user: User | null) => void;
   logout: () => void;
+  refresh: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType>({
   user: null,
-  isLoading: false,
+  isLoading: true,
   setUser: () => {},
   logout: () => {},
+  refresh: async () => {},
 });
 
+async function loadProfile(): Promise<User | null> {
+  const supabase = createClient();
+  const {
+    data: { user: authUser },
+  } = await supabase.auth.getUser();
+  if (!authUser) return null;
+
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("*")
+    .eq("id", authUser.id)
+    .maybeSingle();
+
+  return {
+    id: authUser.id,
+    username:
+      profile?.username ??
+      authUser.email?.split("@")[0] ??
+      "user",
+    fullName:
+      profile?.full_name ??
+      (authUser.user_metadata?.full_name as string | undefined) ??
+      authUser.email ??
+      "User",
+    role: (profile?.role as string) ?? "staff",
+    isActive: profile?.is_active ?? true,
+  };
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [, setLocation] = useLocation();
+  const router = useRouter();
   const [user, setUserState] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const logoutMutation = useLogout();
 
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        setUserState(JSON.parse(stored));
-      }
-    } catch {
-      localStorage.removeItem(STORAGE_KEY);
-    }
-    setIsLoading(false);
+  const refresh = useCallback(async () => {
+    const profile = await loadProfile();
+    setUserState(profile);
   }, []);
 
-  const setUser = (user: User | null) => {
-    setUserState(user);
-    if (user) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(user));
-    } else {
-      localStorage.removeItem(STORAGE_KEY);
-    }
-  };
-
   useEffect(() => {
-    if (!isLoading) {
-      // Use the 'location' from wouter which is protocol-aware (works with Hash routing)
-      const path = window.location.hash 
-        ? window.location.hash.slice(1) || "/" 
-        : window.location.pathname;
-
-      console.info(`[Auth] Heartbeat: user=${user ? user.username : "null"}, path=${path}`);
-
-      if (!user && path !== "/login") {
-        console.info(`[Auth] Redirecting to /login from ${path}`);
-        setLocation("/login");
-      } else if (user && path === "/login") {
-        console.info(`[Auth] User exists, redirecting to /dashboard`);
-        setLocation("/dashboard");
+    let mounted = true;
+    (async () => {
+      try {
+        const profile = await loadProfile();
+        if (mounted) setUserState(profile);
+      } finally {
+        if (mounted) setIsLoading(false);
       }
-    }
-  }, [user, isLoading, setLocation]);
+    })();
 
-  const logout = async () => {
-    try {
-      await logoutMutation.mutateAsync();
-    } catch {
-    }
-    setUser(null);
-    setLocation("/login");
-  };
+    const supabase = createClient();
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async () => {
+      const profile = await loadProfile();
+      if (mounted) setUserState(profile);
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  const setUser = useCallback((next: User | null) => {
+    setUserState(next);
+  }, []);
+
+  const logout = useCallback(async () => {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    setUserState(null);
+    router.push("/login");
+    router.refresh();
+  }, [router]);
+
+  const value = useMemo(
+    () => ({ user, isLoading, setUser, logout, refresh }),
+    [user, isLoading, setUser, logout, refresh],
+  );
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
+      <div className="flex min-h-screen items-center justify-center bg-background">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
       </div>
     );
   }
 
-  return (
-    <AuthContext.Provider value={{ user, isLoading, setUser, logout }}>
-      {children}
-    </AuthContext.Provider>
-  );
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export const useAuth = () => useContext(AuthContext);

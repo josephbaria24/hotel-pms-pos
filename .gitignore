@@ -6,6 +6,7 @@ dist/
 build/
 out/
 release/
+.next/
 *.tsbuildinfo
 
 # Electron packaging artifacts

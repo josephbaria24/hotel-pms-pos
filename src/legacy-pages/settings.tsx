@@ -20,6 +20,8 @@ interface ConnectionStatus {
   updatedAt: string;
 }
 
+type ElectronNetworkConfig = any;
+
 export default function Settings() {
   const { data: settings, isLoading } = useGetSettings();
   const updateSettingsMutation = useUpdateSettings();
@@ -103,7 +105,7 @@ export default function Settings() {
   async function loadBackups() {
     if (!window.__ELECTRON__?.getBackups) return;
     const rows = await window.__ELECTRON__.getBackups();
-    setBackups(rows);
+    setBackups(rows as Array<{ name: string; path: string; size: number; createdAt: string }>);
   }
 
   useEffect(() => {
@@ -375,7 +377,9 @@ export default function Settings() {
 
       if (foundIp) {
         const hostIp: string = foundIp;
-        setNetworkConfig((prev) => prev ? { ...prev, apiHost: hostIp } : prev);
+        setNetworkConfig((prev: ElectronNetworkConfig | null) =>
+          prev ? { ...prev, apiHost: hostIp } : prev,
+        );
         toast({
           title: "Host Server Found! 🔍",
           description: `Successfully discovered active PalawanSU Hotel Server at ${foundIp}.`,
