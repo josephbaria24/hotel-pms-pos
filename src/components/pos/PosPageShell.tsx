@@ -21,13 +21,13 @@ export function PosPageShell({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="space-y-6">
-      <div className="flex items-start gap-4">
-        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-teal-500/15 text-teal-600 dark:text-teal-400">
-          <Icon className="h-6 w-6" />
+    <div className="space-y-4 sm:space-y-6">
+      <div className="flex items-start gap-3 sm:gap-4">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-teal-500/15 text-teal-600 dark:text-teal-400 sm:h-12 sm:w-12">
+          <Icon className="h-5 w-5 sm:h-6 sm:w-6" />
         </div>
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+        <div className="min-w-0">
+          <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">{title}</h1>
           <p className="text-sm text-muted-foreground">{description}</p>
         </div>
       </div>

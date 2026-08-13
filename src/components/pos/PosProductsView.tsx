@@ -192,8 +192,8 @@ export function PosProductsView() {
           </CardContent>
         </Card>
       ) : (
-        <div className="overflow-hidden rounded-xl border border-border/70">
-          <table className="w-full text-sm">
+        <div className="overflow-x-auto overflow-hidden rounded-xl border border-border/70">
+          <table className="w-full min-w-[640px] text-sm">
             <thead className="bg-muted/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
               <tr>
                 <th className="px-4 py-3 font-medium">Product</th>

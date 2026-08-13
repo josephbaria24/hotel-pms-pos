@@ -8,6 +8,7 @@ import {
   ArrowLeftRight,
   ClipboardList,
   LayoutGrid,
+  Menu,
   Moon,
   Package,
   Receipt,
@@ -22,6 +23,13 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 
 const DashboardIcon = ({ className }: { className?: string }) => (
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className={className}>
@@ -126,12 +134,180 @@ const posNavigation: NavItem[] = [
   { name: "Floor plan", href: "/pos/tables", icon: LayoutGrid },
 ];
 
+type SidebarPanelProps = {
+  isPos: boolean;
+  pathname: string;
+  navigation: NavItem[];
+  switchHref: string;
+  switchTarget: string;
+  switchLabel: string;
+  modeSwitch: "POS" | "PMS" | null;
+  onModeSwitch: (e: React.MouseEvent<HTMLAnchorElement>) => void;
+  isDarkMode: boolean;
+  onToggleTheme: () => void;
+  user: { fullName?: string; username?: string; role?: string } | null;
+  onLogout: () => void;
+  onNavigate?: () => void;
+  showTooltips?: boolean;
+  showModeSwitch?: boolean;
+};
+
+function SidebarPanel({
+  isPos,
+  pathname,
+  navigation,
+  switchHref,
+  switchTarget,
+  switchLabel,
+  modeSwitch,
+  onModeSwitch,
+  isDarkMode,
+  onToggleTheme,
+  user,
+  onLogout,
+  onNavigate,
+  showTooltips = true,
+  showModeSwitch = true,
+}: SidebarPanelProps) {
+  const modeSwitchButton = (
+    <Link
+      href={switchHref}
+      onClick={(e) => {
+        onModeSwitch(e);
+        onNavigate?.();
+      }}
+      aria-label={switchLabel}
+      aria-disabled={!!modeSwitch}
+      className="inline-flex h-9 min-w-9 shrink-0 flex-col items-center justify-center gap-0.5 rounded-lg border border-sidebar-border bg-sidebar-accent/45 px-1.5 text-sidebar-foreground/80 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
+    >
+      <ArrowLeftRight className="h-3.5 w-3.5" />
+      <span className="text-[9px] font-semibold uppercase leading-none tracking-wide">
+        {switchTarget}
+      </span>
+    </Link>
+  );
+
+  return (
+    <div
+      className={cn(
+        "flex h-full min-h-0 w-full flex-col bg-sidebar text-sidebar-foreground",
+        isPos && "sidebar-pos",
+      )}
+    >
+      <div className="flex items-center gap-3 border-b border-sidebar-border/80 p-4 pr-12 lg:pr-4">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-white p-1 shadow-sm">
+          <img src="/logo.png" alt="PalawanSU Hotel Logo" className="h-full w-full object-contain" />
+        </div>
+        <div className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate text-[15px] font-bold leading-tight tracking-tight text-sidebar-foreground">
+            PalawanSU Hotel
+          </span>
+          <span className="text-[10px] uppercase tracking-[0.18em] text-sidebar-foreground/65">
+            {isPos ? "Point of Sale" : "Property Management"}
+          </span>
+        </div>
+        {showModeSwitch &&
+          (showTooltips ? (
+            <Tooltip>
+              <TooltipTrigger asChild>{modeSwitchButton}</TooltipTrigger>
+              <TooltipContent side="right">{switchLabel}</TooltipContent>
+            </Tooltip>
+          ) : (
+            modeSwitchButton
+          ))}
+      </div>
+
+      <div className="mt-1 flex flex-1 flex-col gap-1 overflow-y-auto overscroll-contain px-3 py-3">
+        {navigation.map((item) => {
+          const locPath = pathname.split("?")[0] ?? pathname;
+          const isGuestsHub = item.href === "/guests";
+          const isPosRegister = item.href === "/pos";
+          const isActive = isGuestsHub
+            ? locPath === "/guests" || locPath === "/checkin" || locPath === "/reservations"
+            : isPosRegister
+              ? locPath === "/pos"
+              : locPath === item.href || pathname.startsWith(`${item.href}/`);
+          return (
+            <Link key={item.href} href={item.href} onClick={() => onNavigate?.()}>
+              <div
+                className={cn(
+                  "group flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2.5 text-[13px] font-medium transition-all duration-200",
+                  isActive
+                    ? "border-sidebar-primary bg-sidebar-primary text-sidebar-primary-foreground shadow-[0_0_12px_rgba(255,68,0,0.25)]"
+                    : "border-transparent text-sidebar-foreground/78 hover:border-sidebar-border hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                  isPos && isActive && "shadow-[0_0_12px_rgba(13,148,136,0.35)]",
+                )}
+              >
+                <item.icon
+                  className={cn(
+                    "h-[24px] w-[24px] shrink-0",
+                    isActive
+                      ? "text-sidebar-primary-foreground"
+                      : "text-sidebar-foreground/60 group-hover:text-sidebar-foreground",
+                  )}
+                />
+                {item.name}
+              </div>
+            </Link>
+          );
+        })}
+      </div>
+
+      <div className="mt-auto border-t border-sidebar-border p-3">
+        <button
+          type="button"
+          onClick={onToggleTheme}
+          className="mb-2 flex w-full items-center justify-between gap-3 rounded-lg border border-sidebar-border bg-sidebar-accent/45 px-3 py-2.5 text-xs font-medium transition-colors hover:bg-sidebar-accent"
+        >
+          <span className="text-sidebar-foreground/80">
+            {isDarkMode ? "Dark Mode" : "Light Mode"}
+          </span>
+          <span className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-sidebar text-sidebar-foreground">
+            {isDarkMode ? <Moon className="h-3.5 w-3.5" /> : <Sun className="h-3.5 w-3.5" />}
+          </span>
+        </button>
+
+        <div className="mb-2 flex items-center gap-3 rounded-lg border border-sidebar-border/70 bg-sidebar-accent/55 px-3 py-2.5">
+          <div
+            className={cn(
+              "flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold",
+              isPos ? "bg-teal-500/20 text-teal-300" : "bg-primary/20 text-primary",
+            )}
+          >
+            {user?.fullName?.charAt(0) || user?.username?.charAt(0) || "U"}
+          </div>
+          <div className="flex flex-1 flex-col overflow-hidden">
+            <span className="truncate text-sm font-medium text-sidebar-foreground">
+              {user?.fullName || user?.username || "User"}
+            </span>
+            <span className="text-[11px] capitalize text-sidebar-foreground/60">
+              {user?.role || "Guest"}
+            </span>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            onNavigate?.();
+            onLogout();
+          }}
+          className="flex w-full items-center gap-3 rounded-lg border border-transparent px-3 py-2.5 text-sm font-medium text-sidebar-foreground/80 transition-colors hover:border-destructive/30 hover:bg-destructive/10 hover:text-destructive"
+        >
+          <LogoutIcon className="h-[24px] w-[24px] opacity-70" />
+          Sign Out
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function SidebarLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() || "/";
   const router = useRouter();
   const { user, logout } = useAuth();
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [modeSwitch, setModeSwitch] = useState<"POS" | "PMS" | null>(null);
+  const [mobileOpen, setMobileOpen] = useState(false);
   const switchStartedAt = useRef(0);
   const isPos = pathname === "/pos" || pathname.startsWith("/pos/");
 
@@ -142,6 +318,10 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
     document.documentElement.classList.toggle("dark", shouldUseDark);
     setIsDarkMode(shouldUseDark);
   }, []);
+
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname]);
 
   useEffect(() => {
     if (!modeSwitch) return;
@@ -182,7 +362,23 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
     if (modeSwitch) return;
     switchStartedAt.current = Date.now();
     setModeSwitch(switchTarget);
+    setMobileOpen(false);
     router.push(switchHref);
+  };
+
+  const panelProps: SidebarPanelProps = {
+    isPos,
+    pathname,
+    navigation,
+    switchHref,
+    switchTarget,
+    switchLabel,
+    modeSwitch,
+    onModeSwitch: handleModeSwitch,
+    isDarkMode,
+    onToggleTheme: toggleTheme,
+    user,
+    onLogout: () => logout(),
   };
 
   return (
@@ -191,7 +387,7 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
         {modeSwitch && (
           <motion.div
             key="mode-switch-overlay"
-            className="pointer-events-auto absolute inset-0 z-50 flex items-center justify-center"
+            className="pointer-events-auto absolute inset-0 z-[60] flex items-center justify-center"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -261,125 +457,78 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
         )}
       </AnimatePresence>
 
-      <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden p-3 pt-2">
-        <div
+      {/* Mobile / tablet top bar */}
+      <header
+        className={cn(
+          "flex shrink-0 items-center gap-3 border-b border-border/70 px-3 py-2.5 lg:hidden",
+          isPos ? "bg-teal-950/40" : "bg-card/80",
+        )}
+      >
+        <button
+          type="button"
+          onClick={() => setMobileOpen(true)}
+          className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-border/80 bg-background text-foreground shadow-sm transition-colors hover:bg-muted"
+          aria-label="Open menu"
+        >
+          <Menu className="h-5 w-5" />
+        </button>
+        <div className="flex min-w-0 flex-1 items-center gap-2.5">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white p-0.5">
+            <img src="/logo.png" alt="" className="h-full w-full object-contain" />
+          </div>
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold tracking-tight">PalawanSU Hotel</div>
+            <div className="truncate text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+              {isPos ? "Point of Sale" : "Property Management"}
+            </div>
+          </div>
+        </div>
+        <Link
+          href={switchHref}
+          onClick={handleModeSwitch}
+          aria-label={switchLabel}
+          className="inline-flex h-10 min-w-10 flex-col items-center justify-center gap-0.5 rounded-xl border border-border/80 bg-background px-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground shadow-sm hover:text-foreground"
+        >
+          <ArrowLeftRight className="h-3.5 w-3.5" />
+          {switchTarget}
+        </Link>
+      </header>
+
+      <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden p-0 sm:p-2 lg:p-3 lg:pt-2">
+        {/* Desktop sidebar */}
+        <aside
           className={cn(
-            "flex w-[280px] flex-col rounded-2xl border border-sidebar-border bg-sidebar text-sidebar-foreground shadow-[0_20px_80px_rgba(0,0,0,0.22)]",
+            "hidden w-[280px] shrink-0 flex-col overflow-hidden rounded-2xl border border-sidebar-border shadow-[0_20px_80px_rgba(0,0,0,0.22)] lg:flex",
             isPos && "sidebar-pos",
           )}
         >
-          <div className="flex items-center gap-3 border-b border-sidebar-border/80 p-4">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-white p-1 shadow-sm">
-              <img src="/logo.png" alt="PalawanSU Hotel Logo" className="h-full w-full object-contain" />
-            </div>
-            <div className="flex min-w-0 flex-1 flex-col">
-              <span className="truncate text-[15px] font-bold leading-tight tracking-tight text-sidebar-foreground">
-                PalawanSU Hotel
-              </span>
-              <span className="text-[10px] uppercase tracking-[0.18em] text-sidebar-foreground/65">
-                {isPos ? "Point of Sale" : "Property Management"}
-              </span>
-            </div>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Link
-                  href={switchHref}
-                  onClick={handleModeSwitch}
-                  aria-label={switchLabel}
-                  aria-disabled={!!modeSwitch}
-                  className="inline-flex h-9 min-w-9 shrink-0 flex-col items-center justify-center gap-0.5 rounded-lg border border-sidebar-border bg-sidebar-accent/45 px-1.5 text-sidebar-foreground/80 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
-                >
-                  <ArrowLeftRight className="h-3.5 w-3.5" />
-                  <span className="text-[9px] font-semibold uppercase leading-none tracking-wide">
-                    {switchTarget}
-                  </span>
-                </Link>
-              </TooltipTrigger>
-              <TooltipContent side="right">{switchLabel}</TooltipContent>
-            </Tooltip>
-          </div>
+          <SidebarPanel {...panelProps} showTooltips />
+        </aside>
 
-          <div className="mt-1 flex flex-1 flex-col gap-1 overflow-y-auto px-3 py-3">
-            {navigation.map((item) => {
-              const locPath = pathname.split("?")[0] ?? pathname;
-              const isGuestsHub = item.href === "/guests";
-              const isPosRegister = item.href === "/pos";
-              const isActive = isGuestsHub
-                ? locPath === "/guests" || locPath === "/checkin" || locPath === "/reservations"
-                : isPosRegister
-                  ? locPath === "/pos"
-                  : locPath === item.href || pathname.startsWith(`${item.href}/`);
-              return (
-                <Link key={item.href} href={item.href}>
-                  <div
-                    className={cn(
-                      "group flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2.5 text-[13px] font-medium transition-all duration-200",
-                      isActive
-                        ? "border-sidebar-primary bg-sidebar-primary text-sidebar-primary-foreground shadow-[0_0_12px_rgba(255,68,0,0.25)]"
-                        : "border-transparent text-sidebar-foreground/78 hover:border-sidebar-border hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-                      isPos && isActive && "shadow-[0_0_12px_rgba(13,148,136,0.35)]",
-                    )}
-                  >
-                    <item.icon
-                      className={cn(
-                        "h-[24px] w-[24px] shrink-0",
-                        isActive
-                          ? "text-sidebar-primary-foreground"
-                          : "text-sidebar-foreground/60 group-hover:text-sidebar-foreground",
-                      )}
-                    />
-                    {item.name}
-                  </div>
-                </Link>
-              );
-            })}
-          </div>
+        {/* Mobile / tablet drawer */}
+        <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
+          <SheetContent
+            side="left"
+            className={cn(
+              "w-[min(100vw-2.5rem,300px)] border-sidebar-border bg-sidebar p-0 text-sidebar-foreground [&>button]:text-sidebar-foreground [&>button]:hover:bg-sidebar-accent",
+              isPos && "sidebar-pos",
+            )}
+          >
+            <SheetHeader className="sr-only">
+              <SheetTitle>Navigation</SheetTitle>
+              <SheetDescription>Main app navigation</SheetDescription>
+            </SheetHeader>
+            <SidebarPanel
+              {...panelProps}
+              showTooltips={false}
+              showModeSwitch={false}
+              onNavigate={() => setMobileOpen(false)}
+            />
+          </SheetContent>
+        </Sheet>
 
-          <div className="mt-auto border-t border-sidebar-border p-3">
-            <button
-              onClick={toggleTheme}
-              className="mb-2 flex w-full items-center justify-between gap-3 rounded-lg border border-sidebar-border bg-sidebar-accent/45 px-3 py-2.5 text-xs font-medium transition-colors hover:bg-sidebar-accent"
-            >
-              <span className="text-sidebar-foreground/80">
-                {isDarkMode ? "Dark Mode" : "Light Mode"}
-              </span>
-              <span className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-sidebar text-sidebar-foreground">
-                {isDarkMode ? <Moon className="h-3.5 w-3.5" /> : <Sun className="h-3.5 w-3.5" />}
-              </span>
-            </button>
-
-            <div className="mb-2 flex items-center gap-3 rounded-lg border border-sidebar-border/70 bg-sidebar-accent/55 px-3 py-2.5">
-              <div
-                className={cn(
-                  "flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold",
-                  isPos
-                    ? "bg-teal-500/20 text-teal-300"
-                    : "bg-primary/20 text-primary",
-                )}
-              >
-                {user?.fullName?.charAt(0) || user?.username?.charAt(0) || "U"}
-              </div>
-              <div className="flex flex-1 flex-col overflow-hidden">
-                <span className="truncate text-sm font-medium text-sidebar-foreground">
-                  {user?.fullName || user?.username || "User"}
-                </span>
-                <span className="text-[11px] capitalize text-sidebar-foreground/60">
-                  {user?.role || "Guest"}
-                </span>
-              </div>
-            </div>
-            <button
-              onClick={() => logout()}
-              className="flex w-full items-center gap-3 rounded-lg border border-transparent px-3 py-2.5 text-sm font-medium text-sidebar-foreground/80 transition-colors hover:border-destructive/30 hover:bg-destructive/10 hover:text-destructive"
-            >
-              <LogoutIcon className="h-[24px] w-[24px] opacity-70" />
-              Sign Out
-            </button>
-          </div>
-        </div>
-
-        <main className="ml-3 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border/70 bg-background">
-          <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-4 sm:p-5 md:p-6">
+        <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-none border-0 bg-background sm:rounded-2xl sm:border sm:border-border/70 lg:ml-3">
+          <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain p-3 sm:p-4 md:p-5 lg:p-6">
             <div className="mx-auto h-full w-full min-w-0 max-w-7xl xl:mx-0 xl:max-w-none">
               {children}
             </div>
