@@ -289,8 +289,12 @@ export default function Rooms() {
   const prettyStatus = (status: string) => status.replace(/_/g, " ");
 
   /** Statuses staff may assign manually (excludes occupied — set at check-in). */
+  const selectableRoomTypes = useMemo(
+    () => roomTypes.filter((o) => Boolean(o.value?.trim())),
+    [roomTypes],
+  );
   const roomStatusesManualPick = useMemo(
-    () => roomStatuses.filter((o) => o.value !== "occupied"),
+    () => roomStatuses.filter((o) => Boolean(o.value?.trim()) && o.value !== "occupied"),
     [roomStatuses],
   );
 
@@ -409,16 +413,27 @@ export default function Rooms() {
   const addOption = async (kind: "type" | "status", value: string, opts?: { disablesRoom?: boolean }) => {
     try {
       const v = value.trim().toLowerCase();
+      if (!v) {
+        toast({
+          title: "Value required",
+          description: `Enter a ${kind === "type" ? "room type" : "status"} name.`,
+          variant: "destructive",
+        });
+        return;
+      }
       if (kind === "status") {
         await createRoomOptionMutation.mutateAsync({ kind: "status", value: v, disablesRoom: opts?.disablesRoom ?? false });
       } else {
         await createRoomOptionMutation.mutateAsync({ kind: "type", value: v });
       }
       queryClient.invalidateQueries({ queryKey: getRoomOptionsQueryKey(kind) });
-      if (kind === "type") setNewTypeOption("");
-      else {
+      if (kind === "type") {
+        setNewTypeOption("");
+        setNewRoom((prev) => ({ ...prev, type: v }));
+      } else {
         setNewStatusOption("");
         setNewStatusDisablesRoom(false);
+        setNewRoom((prev) => ({ ...prev, status: v }));
       }
       toast({ title: `${kind === "type" ? "Room type" : "Room status"} added` });
     } catch (error) {
@@ -599,7 +614,7 @@ export default function Rooms() {
               <SelectItem value="all">
                 <SelectItemText>All statuses</SelectItemText>
               </SelectItem>
-              {roomStatuses.map((option) => (
+              {roomStatuses.filter((option) => Boolean(option.value?.trim())).map((option) => (
                 <SelectItem key={option.id} value={option.value} className="capitalize">
                   <SelectItemText className="capitalize">{option.value}</SelectItemText>
                 </SelectItem>
@@ -665,35 +680,16 @@ export default function Rooms() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <label className="text-sm font-medium">Type</label>
-                    <div className="flex items-center gap-1">
-                      <Input
-                        value={newTypeOption}
-                        onChange={(e) => setNewTypeOption(e.target.value)}
-                        placeholder="new type"
-                        className="h-8 w-28 text-xs"
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => addOption("type", newTypeOption)}
-                      >
-                        <Plus className="w-3.5 h-3.5" />
-                      </Button>
-                    </div>
-                  </div>
+                  <label className="text-sm font-medium">Type</label>
                   <Select
-                    value={newRoom.type}
+                    value={newRoom.type || undefined}
                     onValueChange={(value) => setNewRoom((prev) => ({ ...prev, type: value }))}
                   >
                     <SelectTrigger className="capitalize">
-                      <SelectValue />
+                      <SelectValue placeholder="Select type" />
                     </SelectTrigger>
-                    <SelectContent>
-                      {roomTypes.map((option) => (
+                    <SelectContent className="min-w-[260px]">
+                      {selectableRoomTypes.map((option) => (
                         <SelectItem
                           key={option.id}
                           value={option.value}
@@ -746,6 +742,37 @@ export default function Rooms() {
                           </div>
                         </SelectItem>
                       ))}
+                      <div
+                        className="sticky bottom-0 z-10 mt-1 border-t bg-popover p-2"
+                        onPointerDown={(e) => e.preventDefault()}
+                        onKeyDown={(e) => e.stopPropagation()}
+                      >
+                        <p className="mb-1.5 text-[11px] font-medium text-muted-foreground">Add new type</p>
+                        <div className="flex items-center gap-1.5">
+                          <Input
+                            value={newTypeOption}
+                            onChange={(e) => setNewTypeOption(e.target.value)}
+                            placeholder="e.g. suite"
+                            className="h-8 text-xs"
+                            onKeyDown={(e) => {
+                              e.stopPropagation();
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                void addOption("type", newTypeOption);
+                              }
+                            }}
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            className="h-8 w-8 shrink-0"
+                            onClick={() => void addOption("type", newTypeOption)}
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                          </Button>
+                        </div>
+                      </div>
                     </SelectContent>
                   </Select>
                 </div>
@@ -769,51 +796,15 @@ export default function Rooms() {
                   />
                 </div>
                 <div className="space-y-2 md:col-span-2">
-                  <div className="flex items-center justify-between gap-2 flex-wrap">
-                    <label className="text-sm font-medium">Initial Status</label>
-                    <div className="flex flex-col items-end gap-1.5 sm:flex-row sm:items-center">
-                      <div className="flex items-center gap-1">
-                        <Input
-                          value={newStatusOption}
-                          onChange={(e) => setNewStatusOption(e.target.value)}
-                          placeholder="new status"
-                          className="h-8 w-28 text-xs"
-                        />
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="icon"
-                          className="h-8 w-8"
-                          onClick={() => void addOption("status", newStatusOption, { disablesRoom: newStatusDisablesRoom })}
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between gap-3 rounded-lg border bg-muted/30 px-3 py-2">
-                    <div className="space-y-0.5">
-                      <Label htmlFor="new-status-disables" className="text-xs font-medium cursor-pointer">
-                        Unavailable / not bookable
-                      </Label>
-                      <p className="text-[11px] text-muted-foreground leading-snug">
-                        Use for statuses that take the room offline (e.g. renovation, deep clean).
-                      </p>
-                    </div>
-                    <Switch
-                      id="new-status-disables"
-                      checked={newStatusDisablesRoom}
-                      onCheckedChange={setNewStatusDisablesRoom}
-                    />
-                  </div>
+                  <label className="text-sm font-medium">Initial Status</label>
                   <Select
-                    value={newRoom.status}
+                    value={newRoom.status || undefined}
                     onValueChange={(value) => setNewRoom((prev) => ({ ...prev, status: value }))}
                   >
                     <SelectTrigger className="capitalize">
-                      <SelectValue />
+                      <SelectValue placeholder="Select status" />
                     </SelectTrigger>
-                    <SelectContent>
+                    <SelectContent className="min-w-[280px]">
                       {roomStatusesManualPick.map((option) => (
                         <SelectItem
                           key={option.id}
@@ -878,6 +869,53 @@ export default function Rooms() {
                           </div>
                         </SelectItem>
                       ))}
+                      <div
+                        className="sticky bottom-0 z-10 mt-1 space-y-2 border-t bg-popover p-2"
+                        onPointerDown={(e) => e.preventDefault()}
+                        onKeyDown={(e) => e.stopPropagation()}
+                      >
+                        <p className="text-[11px] font-medium text-muted-foreground">Add new status</p>
+                        <div className="flex items-center gap-1.5">
+                          <Input
+                            value={newStatusOption}
+                            onChange={(e) => setNewStatusOption(e.target.value)}
+                            placeholder="e.g. renovation"
+                            className="h-8 text-xs"
+                            onKeyDown={(e) => {
+                              e.stopPropagation();
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                void addOption("status", newStatusOption, {
+                                  disablesRoom: newStatusDisablesRoom,
+                                });
+                              }
+                            }}
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            className="h-8 w-8 shrink-0"
+                            onClick={() =>
+                              void addOption("status", newStatusOption, {
+                                disablesRoom: newStatusDisablesRoom,
+                              })
+                            }
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                          </Button>
+                        </div>
+                        <div className="flex items-center justify-between gap-2 rounded-md border bg-muted/30 px-2.5 py-2">
+                          <Label htmlFor="new-status-disables" className="text-[11px] font-medium cursor-pointer leading-snug">
+                            Unavailable / not bookable
+                          </Label>
+                          <Switch
+                            id="new-status-disables"
+                            checked={newStatusDisablesRoom}
+                            onCheckedChange={setNewStatusDisablesRoom}
+                          />
+                        </div>
+                      </div>
                     </SelectContent>
                   </Select>
                 </div>
@@ -942,7 +980,7 @@ export default function Rooms() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all"><SelectItemText>All types</SelectItemText></SelectItem>
-                    {roomTypes.map((o) => (
+                    {selectableRoomTypes.map((o) => (
                       <SelectItem key={o.id} value={o.value} className="capitalize">
                         <SelectItemText className="capitalize">{o.value}</SelectItemText>
                       </SelectItem>
@@ -1017,7 +1055,7 @@ export default function Rooms() {
                   <SelectContent>
                     <SelectItem value="all"><SelectItemText>All housekeepers</SelectItemText></SelectItem>
                     <SelectItem value="unassigned"><SelectItemText>Unassigned</SelectItemText></SelectItem>
-                    {housekeepers.map((h) => (
+                    {housekeepers.filter((h) => Boolean(h.id?.trim())).map((h) => (
                       <SelectItem key={h.id} value={h.id}>
                         <SelectItemText>{h.name}</SelectItemText>
                       </SelectItem>
@@ -1165,7 +1203,7 @@ export default function Rooms() {
                               </SelectTrigger>
                               <SelectContent>
                                 <SelectItem value="unassigned"><SelectItemText>Unassigned</SelectItemText></SelectItem>
-                                {housekeepers.map((hk) => (
+                                {housekeepers.filter((hk) => Boolean(hk.id?.trim())).map((hk) => (
                                   <SelectItem key={hk.id} value={hk.id}>
                                     <SelectItemText>{hk.name}</SelectItemText>
                                   </SelectItem>
@@ -2328,12 +2366,12 @@ function RoomDetails({
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium">Type</label>
-              <Select value={editForm.type} onValueChange={(value) => setEditForm((prev) => ({ ...prev, type: value }))}>
+              <Select value={editForm.type || undefined} onValueChange={(value) => setEditForm((prev) => ({ ...prev, type: value }))}>
                 <SelectTrigger className="capitalize">
-                  <SelectValue />
+                  <SelectValue placeholder="Select type" />
                 </SelectTrigger>
                 <SelectContent>
-                  {roomTypes.map((option) => (
+                  {roomTypes.filter((o) => Boolean(o.value?.trim())).map((option) => (
                     <SelectItem key={option.id} value={option.value} className="capitalize">
                       <SelectItemText className="capitalize">{option.value}</SelectItemText>
                     </SelectItem>
@@ -2370,12 +2408,12 @@ function RoomDetails({
                   <p className="text-xs text-muted-foreground mt-1">Set automatically while a guest is checked in.</p>
                 </div>
               ) : (
-                <Select value={editForm.status} onValueChange={(value) => setEditForm((prev) => ({ ...prev, status: value }))}>
+                <Select value={editForm.status || undefined} onValueChange={(value) => setEditForm((prev) => ({ ...prev, status: value }))}>
                   <SelectTrigger className="capitalize">
-                    <SelectValue />
+                    <SelectValue placeholder="Select status" />
                   </SelectTrigger>
                   <SelectContent>
-                    {statusOptionsManualPick.map((option) => (
+                    {statusOptionsManualPick.filter((option) => Boolean(option.value?.trim())).map((option) => (
                       <SelectItem key={option.id} value={option.value} className="capitalize">
                         <SelectItemText className="capitalize">
                           {option.value}

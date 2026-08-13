@@ -317,10 +317,12 @@ export function useCreateRoomOption() {
       value: string;
       disablesRoom?: boolean;
     }) => {
+      const value = input.value.trim();
+      if (!value) throw new Error("Option value cannot be empty.");
       const supabase = createClient();
       const table =
         input.kind === "type" ? "room_type_options" : "room_status_options";
-      const row: Record<string, unknown> = { id: newId(), value: input.value };
+      const row: Record<string, unknown> = { id: newId(), value };
       if (input.kind === "status")
         row.disables_room = Boolean(input.disablesRoom);
       const { error } = await supabase.from(table).insert(row);

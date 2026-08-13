@@ -36,14 +36,14 @@ npx wrangler login
 npm run deploy
 ```
 
-4. In the Cloudflare dashboard → Workers → **palawansu-hotel-pms** → Settings → Variables and Secrets, set:
+4. In the Cloudflare dashboard → Workers → **hotel-pms** → Settings → Variables and Secrets, set:
    - `NEXT_PUBLIC_SUPABASE_URL`
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 
    For Git/Workers Builds, also add those under **Build variables and secrets**.
 
 5. In Supabase → **Authentication → URL Configuration**, add your Workers URL to Site URL / Redirect URLs  
-   (e.g. `https://palawansu-hotel-pms.<account>.workers.dev`).
+   (e.g. `https://hotel-pms.<account>.workers.dev`).
 
 Optional: enable R2 and uncomment `r2_buckets` in `wrangler.jsonc` for Next.js incremental cache.
 

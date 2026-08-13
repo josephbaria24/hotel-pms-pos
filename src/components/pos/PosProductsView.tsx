@@ -279,7 +279,9 @@ export function PosProductsView() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">Uncategorized</SelectItem>
-                  {categories.map((c) => (
+                  {categories
+                    .filter((c) => Boolean(c.id?.trim()))
+                    .map((c) => (
                     <SelectItem key={c.id} value={c.id}>
                       {c.name}
                     </SelectItem>

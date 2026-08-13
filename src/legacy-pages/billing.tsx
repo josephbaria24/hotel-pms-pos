@@ -528,7 +528,9 @@ export default function Billing() {
                   {activeReservations.length === 0 ? (
                     <SelectItem value="none" disabled>No active reservations</SelectItem>
                   ) : (
-                    activeReservations.map((res) => (
+                    activeReservations
+                      .filter((res) => Boolean(res.id?.trim()))
+                      .map((res) => (
                       <SelectItem key={res.id} value={res.id}>
                         {res.reservationNumber} - {res.guestName} (Room {res.roomNumber}) - Bal: ₱{res.balance.toFixed(2)}
                       </SelectItem>

@@ -381,7 +381,7 @@ export function PosRegisterView() {
                     <SelectContent>
                       <SelectItem value="none">No table</SelectItem>
                       {tables
-                        .filter((t) => t.status !== "inactive")
+                        .filter((t) => t.status !== "inactive" && Boolean(t.id?.trim()))
                         .map((t) => (
                           <SelectItem key={t.id} value={t.id}>
                             {t.name} · {t.zone} ({t.status})
@@ -400,7 +400,9 @@ export function PosRegisterView() {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="none">No room</SelectItem>
-                      {rooms.map((r) => (
+                      {rooms
+                        .filter((r) => Boolean(r.id?.trim()))
+                        .map((r) => (
                         <SelectItem key={r.id} value={r.id}>
                           Room {r.roomNumber} · {r.status}
                         </SelectItem>
