@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
 import {
   useCreateRoom,
   useUpdateRoom,
@@ -16,6 +16,7 @@ import {
   type Room,
   type Reservation,
   type RoomOption,
+  type RoomOptionKind,
   useListHousekeepers,
   useCreateHousekeeper,
   useUpdateHousekeeper,
@@ -30,6 +31,11 @@ import { NumberInput } from "@/components/ui/number-input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -83,10 +89,12 @@ import {
   Wrench,
   Sparkles,
   CheckCircle2,
+  Check,
   AlertTriangle,
   History,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Tag,
   Hash,
   CircleDollarSign,
@@ -204,16 +212,255 @@ const TIMELINE_DAYS = 14;
 
 /** Occupied, cleaning, and maintenance are system-managed or fixed labels — not renamed/deleted here. */
 const BUILTIN_ROOM_STATUS_VALUES = new Set(["available", "occupied", "cleaning", "maintenance"]);
+const BUILTIN_ROOM_CONDITION_VALUES = new Set(["clean", "dirty"]);
 
 function isBuiltinRoomStatusValue(value: string): boolean {
   return BUILTIN_ROOM_STATUS_VALUES.has(value.trim().toLowerCase());
 }
 
+function isBuiltinRoomConditionValue(value: string): boolean {
+  return BUILTIN_ROOM_CONDITION_VALUES.has(value.trim().toLowerCase());
+}
+
+function optionKindTitle(kind: RoomOptionKind) {
+  if (kind === "type") return "Room Type";
+  if (kind === "status") return "Room Status";
+  return "Room Condition";
+}
+
+function optionKindPhrase(kind: RoomOptionKind) {
+  if (kind === "type") return "room type";
+  if (kind === "status") return "room status";
+  return "room condition";
+}
+
+const CONDITION_CHIP_STYLES: Record<string, string> = {
+  clean: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+  dirty: "bg-rose-500/10 text-rose-600 dark:text-rose-400",
+};
+
+const CONDITION_PALETTE = [
+  "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  "bg-sky-500/10 text-sky-600 dark:text-sky-400",
+  "bg-violet-500/10 text-violet-600 dark:text-violet-400",
+  "bg-teal-500/10 text-teal-600 dark:text-teal-400",
+  "bg-fuchsia-500/10 text-fuchsia-600 dark:text-fuchsia-400",
+  "bg-orange-500/10 text-orange-600 dark:text-orange-400",
+];
+
+function conditionChipClass(condition: string) {
+  const key = (condition || "clean").trim().toLowerCase();
+  if (CONDITION_CHIP_STYLES[key]) return CONDITION_CHIP_STYLES[key];
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
+  return CONDITION_PALETTE[hash % CONDITION_PALETTE.length]!;
+}
+
+function sortRoomConditions(options: RoomOption[]) {
+  const rank = (value: string) => {
+    const key = value.trim().toLowerCase();
+    if (key === "clean") return 0;
+    if (key === "dirty") return 1;
+    return 2;
+  };
+  return [...options].sort((a, b) => {
+    const ra = rank(a.value);
+    const rb = rank(b.value);
+    if (ra !== rb) return ra - rb;
+    return a.value.localeCompare(b.value);
+  });
+}
+
+function sortUnitStatuses(options: RoomOption[]) {
+  const rank = (value: string) => {
+    const key = value.trim().toLowerCase();
+    if (key === "available" || key === "vacant") return 0;
+    if (key === "occupied") return 1;
+    return 2;
+  };
+  return [...options].sort((a, b) => {
+    const ra = rank(a.value);
+    const rb = rank(b.value);
+    if (ra !== rb) return ra - rb;
+    return a.value.localeCompare(b.value);
+  });
+}
+
+function unitStatusLabel(value: string) {
+  const key = (value || "available").trim().toLowerCase();
+  if (key === "available") return "vacant";
+  return value;
+}
+
+function unitStatusChipClass(status: string) {
+  const key = (status || "available").trim().toLowerCase();
+  if (key === "occupied") return "bg-amber-500/10 text-amber-600 dark:text-amber-400";
+  if (key === "available" || key === "vacant") {
+    return "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400";
+  }
+  const sx = styleFor(key);
+  return cn(sx.chipBg, sx.chipText);
+}
+
+function HousekeepingOptionChipSelect({
+  value,
+  options,
+  chipClass,
+  isBuiltin,
+  labelFor = (optionValue) => optionValue,
+  addLabel,
+  addPlaceholder,
+  failTitle,
+  onAssign,
+  onAdd,
+  onEdit,
+  onDelete,
+}: {
+  value: string;
+  options: RoomOption[];
+  chipClass: (value: string) => string;
+  isBuiltin: (value: string) => boolean;
+  labelFor?: (value: string) => string;
+  addLabel: string;
+  addPlaceholder: string;
+  failTitle: string;
+  onAssign: (value: string) => boolean | void;
+  onAdd: (value: string) => Promise<void>;
+  onEdit: (id: string, value: string) => void;
+  onDelete: (id: string, value: string) => void;
+}) {
+  const { toast } = useToast();
+  const [draft, setDraft] = useState("");
+  const [open, setOpen] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const current = (value || "").trim().toLowerCase();
+  const listed = options.some((option) => option.value === current)
+    ? options
+    : current
+      ? [{ id: `current-${current}`, value: current }, ...options]
+      : options;
+
+  const submitNewOption = async () => {
+    const next = draft.trim();
+    if (!next || adding) return;
+    setAdding(true);
+    try {
+      await onAdd(next);
+      setDraft("");
+    } catch (error) {
+      toast({
+        title: failTitle,
+        description: error instanceof Error ? error.message : "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            "flex h-8 min-w-28 w-auto max-w-[10.5rem] items-center justify-between gap-1 rounded-full px-2.5 text-xs font-semibold capitalize",
+            chipClass(current),
+          )}
+        >
+          <span className="truncate">{labelFor(current)}</span>
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-50" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-[260px] p-1" onOpenAutoFocus={(event) => event.preventDefault()}>
+        <div className="max-h-56 overflow-y-auto p-0.5">
+          {listed.map((option) => (
+            <div key={option.id} className="flex items-center gap-0.5 rounded-sm hover:bg-accent">
+              <button
+                type="button"
+                className="flex min-w-0 flex-1 items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm capitalize"
+                onClick={() => {
+                  const applied = onAssign(option.value);
+                  if (applied !== false) setOpen(false);
+                }}
+              >
+                <Check
+                  className={cn(
+                    "h-3.5 w-3.5 shrink-0",
+                    option.value === current ? "opacity-100" : "opacity-0",
+                  )}
+                />
+                <span className="truncate">{labelFor(option.value)}</span>
+              </button>
+              {!isBuiltin(option.value) ? (
+                <div className="flex shrink-0 items-center pr-0.5">
+                  <button
+                    type="button"
+                    className="flex h-7 w-7 items-center justify-center rounded-md hover:bg-muted"
+                    onClick={() => {
+                      setOpen(false);
+                      onEdit(option.id, option.value);
+                    }}
+                  >
+                    <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
+                  </button>
+                  <button
+                    type="button"
+                    className="flex h-7 w-7 items-center justify-center rounded-md text-destructive hover:bg-destructive/10"
+                    onClick={() => {
+                      setOpen(false);
+                      onDelete(option.id, option.value);
+                    }}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <span className="pr-2 text-[10px] text-muted-foreground">Built-in</span>
+              )}
+            </div>
+          ))}
+        </div>
+        <div className="space-y-2 border-t p-2">
+          <p className="text-[11px] font-medium text-muted-foreground">{addLabel}</p>
+          <div className="flex items-center gap-1.5">
+            <Input
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder={addPlaceholder}
+              className="h-8 text-xs"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void submitNewOption();
+                }
+              }}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="h-8 w-8 shrink-0"
+              disabled={adding}
+              onClick={() => void submitNewOption()}
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 export default function Rooms() {
+  const [, setLocation] = useLocation();
+  const locationSearch = useSearch();
   const { data: rooms, isLoading } = useListRooms();
   const { data: reservations = [] } = useListReservations();
   const { data: roomTypes = [] } = useListRoomOptions("type");
   const { data: roomStatuses = [] } = useListRoomOptions("status");
+  const { data: roomConditionOptions = [] } = useListRoomOptions("condition");
   const createRoomMutation = useCreateRoom();
   const createRoomOptionMutation = useCreateRoomOption();
   const updateRoomOptionMutation = useUpdateRoomOption();
@@ -234,10 +481,11 @@ export default function Rooms() {
   // Housekeeping view filters
   const [hkFilterUnitType, setHkFilterUnitType] = useState<string>("all");
   const [hkFilterFrontdeskStatus, setHkFilterFrontdeskStatus] = useState<string>("all");
-  const [hkFilterUnitStatus, setHkFilterUnitStatus] = useState<string>("all"); // 'all' | 'occupied' | 'vacant'
-  const [hkFilterCondition, setHkFilterCondition] = useState<string>("all"); // 'all' | 'clean' | 'dirty'
+  const [hkFilterUnitStatus, setHkFilterUnitStatus] = useState<string>("all");
+  const [hkFilterCondition, setHkFilterCondition] = useState<string>("all");
   const [hkFilterDnd, setHkFilterDnd] = useState<string>("all"); // 'all' | 'dnd' | 'no-dnd'
   const [hkFilterHousekeeper, setHkFilterHousekeeper] = useState<string>("all"); // 'all' | 'unassigned' | hkId
+  const [occupiedVacantWarning, setOccupiedVacantWarning] = useState<string | null>(null);
 
   // Housekeeper management state
   const [isHkManagerOpen, setIsHkManagerOpen] = useState(false);
@@ -261,14 +509,14 @@ export default function Rooms() {
   const [newStatusOption, setNewStatusOption] = useState("");
   const [newStatusDisablesRoom, setNewStatusDisablesRoom] = useState(false);
   const [editingOption, setEditingOption] = useState<{
-    kind: "type" | "status";
+    kind: RoomOptionKind;
     id: string;
     currentValue: string;
     nextValue: string;
     disablesRoom?: boolean;
   } | null>(null);
   const [deletingOption, setDeletingOption] = useState<{
-    kind: "type" | "status";
+    kind: RoomOptionKind;
     id: string;
     value: string;
   } | null>(null);
@@ -287,6 +535,30 @@ export default function Rooms() {
   });
 
   const safeRooms = rooms ?? [];
+
+  const roomQuery = useMemo(() => {
+    const raw = locationSearch.startsWith("?") ? locationSearch.slice(1) : locationSearch;
+    return new URLSearchParams(raw).get("room");
+  }, [locationSearch]);
+
+  const closeRoomDetails = () => {
+    setViewingRoomId(null);
+    if (!roomQuery) return;
+    const raw = locationSearch.startsWith("?") ? locationSearch.slice(1) : locationSearch;
+    const params = new URLSearchParams(raw);
+    params.delete("room");
+    const qs = params.toString();
+    setLocation(qs ? `/rooms?${qs}` : "/rooms");
+  };
+
+  useEffect(() => {
+    if (!roomQuery || !rooms?.length) return;
+    const match =
+      rooms.find((r) => r.id === roomQuery) ||
+      rooms.find((r) => r.roomNumber === roomQuery);
+    if (match) setViewingRoomId(match.id);
+  }, [roomQuery, rooms]);
+
   const total = safeRooms.length || 1;
   const availableCount = safeRooms.filter((r) => r.status === "available").length;
   const occupiedCount = safeRooms.filter((r) => r.status === "occupied").length;
@@ -304,6 +576,26 @@ export default function Rooms() {
     () => roomStatuses.filter((o) => Boolean(o.value?.trim()) && o.value !== "occupied"),
     [roomStatuses],
   );
+  const roomConditions = useMemo(() => {
+    const fromDb = roomConditionOptions.filter((o) => Boolean(o.value?.trim()));
+    if (fromDb.length === 0) {
+      return sortRoomConditions([
+        { id: "builtin-clean", value: "clean" },
+        { id: "builtin-dirty", value: "dirty" },
+      ]);
+    }
+    return sortRoomConditions(fromDb);
+  }, [roomConditionOptions]);
+  const roomUnitStatuses = useMemo(() => {
+    const fromDb = roomStatuses.filter((o) => Boolean(o.value?.trim()));
+    if (fromDb.length === 0) {
+      return sortUnitStatuses([
+        { id: "builtin-available", value: "available" },
+        { id: "builtin-occupied", value: "occupied" },
+      ]);
+    }
+    return sortUnitStatuses(fromDb);
+  }, [roomStatuses]);
 
   const filteredRooms = useMemo(() => {
     const lowered = search.trim().toLowerCase();
@@ -364,7 +656,6 @@ export default function Rooms() {
 
       // Calculate reservation context
       const resData = reservationsForRoom(room);
-      const isOccupied = room.status === "occupied" || !!resData.current;
       const frontdeskStatus = resData.current 
         ? "checked_in" 
         : (resData.upcoming.length > 0 ? "reserved" : "vacant");
@@ -372,10 +663,10 @@ export default function Rooms() {
       // 2. Frontdesk Status
       if (hkFilterFrontdeskStatus !== "all" && frontdeskStatus !== hkFilterFrontdeskStatus) return false;
 
-      // 3. Unit Status (Occupied/Vacant)
+      // 3. Unit Status
       if (hkFilterUnitStatus !== "all") {
-        if (hkFilterUnitStatus === "occupied" && !isOccupied) return false;
-        if (hkFilterUnitStatus === "vacant" && isOccupied) return false;
+        const unitKey = (room.status || "available").trim().toLowerCase();
+        if (unitKey !== hkFilterUnitStatus) return false;
       }
 
       // 4. Condition
@@ -417,13 +708,13 @@ export default function Rooms() {
     return "outline";
   };
 
-  const addOption = async (kind: "type" | "status", value: string, opts?: { disablesRoom?: boolean }) => {
+  const addOption = async (kind: RoomOptionKind, value: string, opts?: { disablesRoom?: boolean }) => {
     try {
       const v = value.trim().toLowerCase();
       if (!v) {
         toast({
           title: "Value required",
-          description: `Enter a ${kind === "type" ? "room type" : "status"} name.`,
+          description: `Enter a ${optionKindPhrase(kind)} name.`,
           variant: "destructive",
         });
         return;
@@ -431,18 +722,18 @@ export default function Rooms() {
       if (kind === "status") {
         await createRoomOptionMutation.mutateAsync({ kind: "status", value: v, disablesRoom: opts?.disablesRoom ?? false });
       } else {
-        await createRoomOptionMutation.mutateAsync({ kind: "type", value: v });
+        await createRoomOptionMutation.mutateAsync({ kind, value: v });
       }
       queryClient.invalidateQueries({ queryKey: getRoomOptionsQueryKey(kind) });
       if (kind === "type") {
         setNewTypeOption("");
         setNewRoom((prev) => ({ ...prev, type: v }));
-      } else {
+      } else if (kind === "status") {
         setNewStatusOption("");
         setNewStatusDisablesRoom(false);
         setNewRoom((prev) => ({ ...prev, status: v }));
       }
-      toast({ title: `${kind === "type" ? "Room type" : "Room status"} added` });
+      toast({ title: `${optionKindTitle(kind)} added` });
     } catch (error) {
       toast({
         title: "Failed to add option",
@@ -454,8 +745,11 @@ export default function Rooms() {
 
   /** Throws on failure so callers (e.g. room details menu) can avoid clearing input on failure. */
   const addRoomStatusOptionStrict = async (value: string, disablesRoom = false) => {
-    const v = value.trim().toLowerCase();
+    const v = value.trim().toLowerCase() === "vacant" ? "available" : value.trim().toLowerCase();
     if (!v) throw new Error("Status name is required");
+    if (roomStatuses.some((option) => option.value.trim().toLowerCase() === v)) {
+      throw new Error("That status already exists.");
+    }
     await createRoomOptionMutation.mutateAsync({ kind: "status", value: v, disablesRoom });
     queryClient.invalidateQueries({ queryKey: getRoomOptionsQueryKey("status") });
     setNewStatusOption("");
@@ -463,11 +757,30 @@ export default function Rooms() {
     toast({ title: "Room status added" });
   };
 
-  const editOption = async (kind: "type" | "status", id: string, currentValue: string) => {
+  const addRoomConditionOptionStrict = async (value: string) => {
+    const v = value.trim().toLowerCase();
+    if (!v) throw new Error("Condition name is required");
+    if (roomConditions.some((option) => option.value.trim().toLowerCase() === v)) {
+      throw new Error("That condition already exists.");
+    }
+    await createRoomOptionMutation.mutateAsync({ kind: "condition", value: v });
+    queryClient.invalidateQueries({ queryKey: getRoomOptionsQueryKey("condition") });
+    toast({ title: "Room condition added" });
+  };
+
+  const editOption = async (kind: RoomOptionKind, id: string, currentValue: string) => {
     if (kind === "status" && isBuiltinRoomStatusValue(currentValue)) {
       toast({
         title: "Built-in status",
         description: "Available, occupied, cleaning, and maintenance cannot be renamed or deleted.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (kind === "condition" && isBuiltinRoomConditionValue(currentValue)) {
+      toast({
+        title: "Built-in condition",
+        description: "Clean and Dirty cannot be renamed or deleted.",
         variant: "destructive",
       });
       return;
@@ -480,7 +793,7 @@ export default function Rooms() {
   const submitEditOption = async () => {
     if (!editingOption) return;
     const { kind, id, currentValue } = editingOption;
-    const label = kind === "type" ? "Room type" : "Room status";
+    const label = optionKindTitle(kind);
     const nextValue = editingOption.nextValue.trim().toLowerCase();
     if (!nextValue) {
       toast({ title: "Invalid name", description: "Option name cannot be empty.", variant: "destructive" });
@@ -490,7 +803,7 @@ export default function Rooms() {
       kind === "status" ? Boolean(roomStatuses.find((o) => o.id === id)?.disablesRoom) : false;
     const nextDisables = kind === "status" ? Boolean(editingOption.disablesRoom) : false;
     const valueUnchanged = nextValue === currentValue.trim().toLowerCase();
-    if (kind === "type" && valueUnchanged) {
+    if ((kind === "type" || kind === "condition") && valueUnchanged) {
       toast({ title: "No changes", description: "The name is unchanged." });
       setEditingOption(null);
       return;
@@ -501,14 +814,19 @@ export default function Rooms() {
       return;
     }
     try {
-      if (kind === "type") {
-        await updateRoomOptionMutation.mutateAsync({ kind: "type", id, value: nextValue });
-      } else {
+      if (kind === "status") {
         await updateRoomOptionMutation.mutateAsync({
           kind: "status",
           id,
           value: nextValue,
           disablesRoom: nextDisables,
+        });
+      } else {
+        await updateRoomOptionMutation.mutateAsync({
+          kind,
+          id,
+          value: nextValue,
+          previousValue: currentValue.trim().toLowerCase(),
         });
       }
       queryClient.invalidateQueries({ queryKey: getRoomOptionsQueryKey(kind) });
@@ -517,6 +835,9 @@ export default function Rooms() {
       }
       if (kind === "status" && newRoom.status === currentValue.trim().toLowerCase()) {
         setNewRoom((prev) => ({ ...prev, status: nextValue }));
+      }
+      if (kind === "condition" && hkFilterCondition === currentValue.trim().toLowerCase()) {
+        setHkFilterCondition(nextValue);
       }
       toast({ title: `${label} updated`, description: `Saved as "${nextValue}".` });
       setEditingOption(null);
@@ -529,11 +850,19 @@ export default function Rooms() {
     }
   };
 
-  const deleteOption = async (kind: "type" | "status", id: string, displayValue: string) => {
+  const deleteOption = async (kind: RoomOptionKind, id: string, displayValue: string) => {
     if (kind === "status" && isBuiltinRoomStatusValue(displayValue)) {
       toast({
         title: "Built-in status",
         description: "Available, occupied, cleaning, and maintenance cannot be deleted.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (kind === "condition" && isBuiltinRoomConditionValue(displayValue)) {
+      toast({
+        title: "Built-in condition",
+        description: "Clean and Dirty cannot be deleted.",
         variant: "destructive",
       });
       return;
@@ -544,15 +873,18 @@ export default function Rooms() {
   const confirmDeleteOption = async () => {
     if (!deletingOption) return;
     const { kind, id, value } = deletingOption;
-    const titleCase = kind === "type" ? "Room type" : "Room status";
+    const titleCase = optionKindTitle(kind);
     try {
-      await deleteRoomOptionMutation.mutateAsync({ kind, id });
+      await deleteRoomOptionMutation.mutateAsync({ kind, id, value });
       queryClient.invalidateQueries({ queryKey: getRoomOptionsQueryKey(kind) });
       if (kind === "type" && newRoom.type === value.trim().toLowerCase()) {
         setNewRoom((prev) => ({ ...prev, type: "deluxe" }));
       }
       if (kind === "status" && newRoom.status === value.trim().toLowerCase()) {
         setNewRoom((prev) => ({ ...prev, status: "available" }));
+      }
+      if (kind === "condition" && hkFilterCondition === value.trim().toLowerCase()) {
+        setHkFilterCondition("all");
       }
       toast({ title: `${titleCase} deleted`, description: `"${value}" has been removed.` });
       setDeletingOption(null);
@@ -1035,8 +1367,11 @@ export default function Rooms() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all"><SelectItemText>All status</SelectItemText></SelectItem>
-                    <SelectItem value="occupied"><SelectItemText>Occupied</SelectItemText></SelectItem>
-                    <SelectItem value="vacant"><SelectItemText>Vacant</SelectItemText></SelectItem>
+                    {roomUnitStatuses.map((option) => (
+                      <SelectItem key={option.id} value={option.value} className="capitalize">
+                        <SelectItemText className="capitalize">{unitStatusLabel(option.value)}</SelectItemText>
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -1049,8 +1384,11 @@ export default function Rooms() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all"><SelectItemText>All conditions</SelectItemText></SelectItem>
-                    <SelectItem value="clean"><SelectItemText>Clean</SelectItemText></SelectItem>
-                    <SelectItem value="dirty"><SelectItemText>Dirty</SelectItemText></SelectItem>
+                    {roomConditions.map((option) => (
+                      <SelectItem key={option.id} value={option.value} className="capitalize">
+                        <SelectItemText className="capitalize">{option.value}</SelectItemText>
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -1141,7 +1479,6 @@ export default function Rooms() {
                   <tbody className="divide-y">
                     {filteredHkRooms.map((room) => {
                       const resData = reservationsForRoom(room);
-                      const isOccupied = room.status === "occupied" || !!resData.current;
                       const frontdeskStatusVal = resData.current 
                         ? "Checked In" 
                         : (resData.upcoming.length > 0 ? "Reserved" : "Vacant");
@@ -1163,36 +1500,55 @@ export default function Rooms() {
                           <td className="p-3 pl-4 font-semibold text-foreground">Room {room.roomNumber}</td>
                           <td className="p-3 capitalize text-muted-foreground">{room.type}</td>
                           <td className="p-3">
-                            <Select
+                            <HousekeepingOptionChipSelect
                               value={room.condition || "clean"}
-                              onValueChange={(val) => {
+                              options={roomConditions}
+                              chipClass={conditionChipClass}
+                              isBuiltin={isBuiltinRoomConditionValue}
+                              addLabel="Add new condition"
+                              addPlaceholder="e.g. inspected"
+                              failTitle="Failed to add condition"
+                              onAssign={(val) => {
                                 updateRoomMutation.mutate({ id: room.id, condition: val });
                                 toast({ title: `Room ${room.roomNumber} condition updated to ${val}` });
                               }}
-                            >
-                              <SelectTrigger className={cn(
-                                "h-8 w-28 text-xs font-semibold rounded-full border-none shadow-none px-2.5",
-                                room.condition === "dirty" 
-                                  ? "bg-rose-500/10 text-rose-600 dark:text-rose-400" 
-                                  : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                              )}>
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="clean"><SelectItemText>Clean</SelectItemText></SelectItem>
-                                <SelectItem value="dirty"><SelectItemText>Dirty</SelectItemText></SelectItem>
-                              </SelectContent>
-                            </Select>
+                              onAdd={addRoomConditionOptionStrict}
+                              onEdit={(id, optionValue) => void editOption("condition", id, optionValue)}
+                              onDelete={(id, optionValue) => void deleteOption("condition", id, optionValue)}
+                            />
                           </td>
                           <td className="p-3">
-                            <Badge variant={isOccupied ? "secondary" : "default"} className={cn(
-                              "rounded-full px-2.5 py-0.5 text-[11px] font-semibold tracking-wide border-none",
-                              isOccupied 
-                                ? "bg-amber-500/10 text-amber-600 dark:text-amber-400" 
-                                : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                            )}>
-                              {isOccupied ? "Occupied" : "Vacant"}
-                            </Badge>
+                            <HousekeepingOptionChipSelect
+                              value={
+                                resData.current && (room.status || "available") === "available"
+                                  ? "occupied"
+                                  : (room.status || "available")
+                              }
+                              options={roomUnitStatuses}
+                              chipClass={unitStatusChipClass}
+                              isBuiltin={isBuiltinRoomStatusValue}
+                              labelFor={unitStatusLabel}
+                              addLabel="Add new unit status"
+                              addPlaceholder="e.g. blocked"
+                              failTitle="Failed to add unit status"
+                              onAssign={(val) => {
+                                const nextStatus = val.trim().toLowerCase() === "vacant" ? "available" : val.trim().toLowerCase();
+                                if (nextStatus === (room.status || "available").trim().toLowerCase()) return;
+                                const makingVacant = nextStatus === "available";
+                                const hasInHouseGuest = Boolean(resData.current) || room.status === "occupied";
+                                if (makingVacant && hasInHouseGuest) {
+                                  setOccupiedVacantWarning(room.roomNumber);
+                                  return false;
+                                }
+                                updateRoomMutation.mutate({ id: room.id, status: nextStatus });
+                                toast({
+                                  title: `Room ${room.roomNumber} status updated to ${unitStatusLabel(nextStatus)}`,
+                                });
+                              }}
+                              onAdd={addRoomStatusOptionStrict}
+                              onEdit={(id, optionValue) => void editOption("status", id, optionValue)}
+                              onDelete={(id, optionValue) => void deleteOption("status", id, optionValue)}
+                            />
                           </td>
                           <td className="p-3 text-muted-foreground">{arrivalTime}</td>
                           <td className="p-3 text-muted-foreground">{arrivalDate}</td>
@@ -1289,7 +1645,7 @@ export default function Rooms() {
       )}
 
       {/* Room details */}
-      <Dialog open={Boolean(viewingRoom)} onOpenChange={(open) => !open && setViewingRoomId(null)}>
+      <Dialog open={Boolean(viewingRoom)} onOpenChange={(open) => !open && closeRoomDetails()}>
         <DialogContent className="max-w-2xl p-0 overflow-hidden" showCloseButton={false}>
           {viewingRoom && viewingRoomReservations ? (
             <RoomDetails
@@ -1302,7 +1658,7 @@ export default function Rooms() {
               onRequestEditStatusOption={(id, value) => void editOption("status", id, value)}
               onRequestDeleteStatusOption={(id, value) => void deleteOption("status", id, value)}
               onAddStatusOption={(value, disablesRoom) => addRoomStatusOptionStrict(value, disablesRoom)}
-              onCloseDetails={() => setViewingRoomId(null)}
+              onCloseDetails={closeRoomDetails}
             />
           ) : null}
         </DialogContent>
@@ -1312,11 +1668,11 @@ export default function Rooms() {
       <Dialog open={Boolean(editingOption)} onOpenChange={(open) => !open && setEditingOption(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Edit {editingOption?.kind === "type" ? "Room Type" : "Room Status"}</DialogTitle>
+            <DialogTitle>Edit {editingOption ? optionKindTitle(editingOption.kind) : "Option"}</DialogTitle>
             <DialogDescription>
-              {editingOption?.kind === "type"
-                ? "Update the option name."
-                : "Update the label and whether this status marks the room as unavailable."}
+              {editingOption?.kind === "status"
+                ? "Update the label and whether this status marks the room as unavailable."
+                : "Update the option name."}
             </DialogDescription>
           </DialogHeader>
           <div className="py-2 space-y-4">
@@ -1361,8 +1717,11 @@ export default function Rooms() {
             <DialogDescription>
               Delete{" "}
               {deletingOption
-                ? `${deletingOption.kind === "type" ? "room type" : "room status"} "${deletingOption.value}"?`
+                ? `${optionKindPhrase(deletingOption.kind)} "${deletingOption.value}"?`
                 : "this option?"}{" "}
+              {deletingOption?.kind === "condition"
+                ? "Rooms using this condition will be set back to Clean. "
+                : ""}
               This cannot be undone.
             </DialogDescription>
           </DialogHeader>
@@ -1376,6 +1735,20 @@ export default function Rooms() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={Boolean(occupiedVacantWarning)} onOpenChange={(open) => !open && setOccupiedVacantWarning(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Room is currently occupied</AlertDialogTitle>
+            <AlertDialogDescription>
+              Room {occupiedVacantWarning} is currently occupied. Check out the guest first to make this vacant.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction onClick={() => setOccupiedVacantWarning(null)}>OK</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Housekeepers Manager Modal */}
       <Dialog open={isHkManagerOpen} onOpenChange={setIsHkManagerOpen}>

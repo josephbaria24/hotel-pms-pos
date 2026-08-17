@@ -34,6 +34,7 @@ export function mapGuest(
     nationality: (row.nationality as string | null) ?? null,
     notes: (row.notes as string | null) ?? null,
     totalStays: stayCount,
+    createdAt: (row.created_at as string | null) ?? null,
   };
 }
 
@@ -96,6 +97,7 @@ export function mapReservation(
     notes: (row.notes as string | null) ?? null,
     actualCheckInAt: (row.actual_check_in_at as string | null) ?? null,
     actualCheckOutAt: (row.actual_check_out_at as string | null) ?? null,
+    createdAt: (row.created_at as string | null) ?? null,
   };
 }
 
@@ -103,6 +105,7 @@ export function mapPayment(
   row: Record<string, unknown>,
   guestName = "",
   roomNumber = "",
+  reservationNumber = "",
 ): Payment {
   const method = String(row.method ?? "cash");
   return {
@@ -118,6 +121,7 @@ export function mapPayment(
     receiptNumber: `RCP-${String(row.id).slice(0, 8).toUpperCase()}`,
     guestName,
     roomNumber,
+    reservationNumber: reservationNumber || undefined,
   };
 }
 

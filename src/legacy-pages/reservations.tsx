@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { toast } from "sonner";
-import { useSearch } from "wouter";
+import { useSearch, useLocation } from "wouter";
 import {
   useListReservations,
   useCreateReservation,
@@ -72,6 +72,7 @@ type ReservationsProps = {
 };
 
 export default function Reservations({ embedded }: ReservationsProps) {
+  const [, setLocation] = useLocation();
   const { data: reservations, isLoading } = useListReservations();
   const { data: rooms = [] } = useListRooms();
   const { data: guests = [] } = useListGuests();
@@ -1808,7 +1809,22 @@ export default function Reservations({ embedded }: ReservationsProps) {
               filteredReservations.map((res) => (
                 <TableRow key={res.id}>
                   <TableCell className="font-mono text-xs text-muted-foreground">{res.reservationNumber}</TableCell>
-                  <TableCell className="font-medium">{res.guestName}</TableCell>
+                  <TableCell className="font-medium">
+                    {res.guestId ? (
+                      <button
+                        type="button"
+                        title="Open guest folio"
+                        onClick={() =>
+                          setLocation(`/guests?tab=directory&guest=${encodeURIComponent(res.guestId)}`)
+                        }
+                        className="text-left font-medium hover:underline hover:text-primary transition-colors"
+                      >
+                        {res.guestName}
+                      </button>
+                    ) : (
+                      res.guestName
+                    )}
+                  </TableCell>
                   <TableCell>
                     <Badge variant="outline" className="font-mono">{res.roomNumber}</Badge>
                   </TableCell>

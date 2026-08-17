@@ -28,6 +28,7 @@ import type {
   Payment,
   Reservation,
   Room,
+  RoomOptionKind,
   Settings,
   User,
 } from "./types";
@@ -57,8 +58,30 @@ export const getListRoomsQueryKey = () => qk.rooms;
 export const getListReservationsQueryKey = () => qk.reservations;
 export const getListPaymentsQueryKey = () => qk.payments;
 export const getListUsersQueryKey = () => qk.users;
-export const getRoomOptionsQueryKey = (kind: "type" | "status") =>
+export const getRoomOptionsQueryKey = (kind: RoomOptionKind) =>
   qk.roomOptions(kind);
+
+const FALLBACK_CONDITION_OPTIONS = [
+  { id: "builtin-clean", value: "clean", disablesRoom: false },
+  { id: "builtin-dirty", value: "dirty", disablesRoom: false },
+];
+
+function roomOptionsTable(kind: RoomOptionKind) {
+  if (kind === "type") return "room_type_options";
+  if (kind === "status") return "room_status_options";
+  return "room_condition_options";
+}
+
+function isMissingRelationError(error: { code?: string; message?: string }) {
+  const code = error.code ?? "";
+  const message = (error.message ?? "").toLowerCase();
+  return (
+    code === "42P01" ||
+    code === "PGRST205" ||
+    message.includes("does not exist") ||
+    message.includes("schema cache")
+  );
+}
 
 async function logActivity(
   action: string,
@@ -110,6 +133,7 @@ async function fetchPaymentViews(): Promise<Payment[]> {
   if (error) throw error;
   return (data ?? []).map((row) => {
     const res = row.reservations as {
+      reservation_number?: string;
       guests?: { first_name?: string; last_name?: string } | null;
       rooms?: { room_number?: string } | null;
     } | null;
@@ -120,6 +144,7 @@ async function fetchPaymentViews(): Promise<Payment[]> {
       row as Record<string, unknown>,
       guestName,
       res?.rooms?.room_number ?? "",
+      res?.reservation_number ?? "",
     );
   });
 }
@@ -353,15 +378,21 @@ export function useDeleteRoom() {
   });
 }
 
-export function useListRoomOptions(kind: "type" | "status") {
+export function useListRoomOptions(kind: RoomOptionKind) {
   return useQuery({
     queryKey: qk.roomOptions(kind),
     queryFn: async () => {
       const supabase = createClient();
-      const table =
-        kind === "type" ? "room_type_options" : "room_status_options";
-      const { data, error } = await supabase.from(table).select("*").order("value");
-      if (error) throw error;
+      const { data, error } = await supabase
+        .from(roomOptionsTable(kind))
+        .select("*")
+        .order("value");
+      if (error) {
+        if (kind === "condition" && isMissingRelationError(error)) {
+          return FALLBACK_CONDITION_OPTIONS;
+        }
+        throw error;
+      }
       // Lab mode can return the same value from own + admin tenants; Radix
       // SelectItem values must be unique or the trigger shows "AvailableAvailable".
       const seen = new Set<string>();
@@ -373,6 +404,9 @@ export function useListRoomOptions(kind: "type" | "status") {
         seen.add(key);
         options.push(mapped);
       }
+      if (kind === "condition" && options.length === 0) {
+        return FALLBACK_CONDITION_OPTIONS;
+      }
       return options;
     },
   });
@@ -382,19 +416,17 @@ export function useCreateRoomOption() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: {
-      kind: "type" | "status";
+      kind: RoomOptionKind;
       value: string;
       disablesRoom?: boolean;
     }) => {
       const value = input.value.trim();
       if (!value) throw new Error("Option value cannot be empty.");
       const supabase = createClient();
-      const table =
-        input.kind === "type" ? "room_type_options" : "room_status_options";
       const row: Record<string, unknown> = { id: newId(), value };
       if (input.kind === "status")
         row.disables_room = Boolean(input.disablesRoom);
-      const { error } = await supabase.from(table).insert(row);
+      const { error } = await supabase.from(roomOptionsTable(input.kind)).insert(row);
       if (error) throw error;
     },
     onSuccess: (_d, v) =>
@@ -406,40 +438,73 @@ export function useUpdateRoomOption() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: {
-      kind: "type" | "status";
+      kind: RoomOptionKind;
       id: string;
       value: string;
       disablesRoom?: boolean;
+      previousValue?: string;
     }) => {
       const supabase = createClient();
-      const table =
-        input.kind === "type" ? "room_type_options" : "room_status_options";
       const patch: Record<string, unknown> = {
         value: input.value,
         updated_at: new Date().toISOString(),
       };
       if (input.kind === "status" && input.disablesRoom !== undefined)
         patch.disables_room = input.disablesRoom;
-      const { error } = await supabase.from(table).update(patch).eq("id", input.id);
+      const { error } = await supabase
+        .from(roomOptionsTable(input.kind))
+        .update(patch)
+        .eq("id", input.id);
       if (error) throw error;
+      if (
+        input.kind === "condition" &&
+        input.previousValue &&
+        input.previousValue !== input.value
+      ) {
+        await supabase
+          .from("rooms")
+          .update({
+            condition: input.value,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("condition", input.previousValue);
+      }
     },
-    onSuccess: (_d, v) =>
-      qc.invalidateQueries({ queryKey: qk.roomOptions(v.kind) }),
+    onSuccess: (_d, v) => {
+      qc.invalidateQueries({ queryKey: qk.roomOptions(v.kind) });
+      if (v.kind === "condition") qc.invalidateQueries({ queryKey: qk.rooms });
+    },
   });
 }
 
 export function useDeleteRoomOption() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (input: { kind: "type" | "status"; id: string }) => {
+    mutationFn: async (input: {
+      kind: RoomOptionKind;
+      id: string;
+      value?: string;
+    }) => {
       const supabase = createClient();
-      const table =
-        input.kind === "type" ? "room_type_options" : "room_status_options";
-      const { error } = await supabase.from(table).delete().eq("id", input.id);
+      if (input.kind === "condition" && input.value) {
+        await supabase
+          .from("rooms")
+          .update({
+            condition: "clean",
+            updated_at: new Date().toISOString(),
+          })
+          .eq("condition", input.value);
+      }
+      const { error } = await supabase
+        .from(roomOptionsTable(input.kind))
+        .delete()
+        .eq("id", input.id);
       if (error) throw error;
     },
-    onSuccess: (_d, v) =>
-      qc.invalidateQueries({ queryKey: qk.roomOptions(v.kind) }),
+    onSuccess: (_d, v) => {
+      qc.invalidateQueries({ queryKey: qk.roomOptions(v.kind) });
+      if (v.kind === "condition") qc.invalidateQueries({ queryKey: qk.rooms });
+    },
   });
 }
 
@@ -924,6 +989,16 @@ export function useCreatePayment() {
     }) => {
       const supabase = createClient();
       const { data: d } = input;
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      const receivedBy =
+        d.receivedBy &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          d.receivedBy,
+        )
+          ? d.receivedBy
+          : (user?.id ?? null);
       const { error } = await supabase.from("payments").insert({
         id: newId(),
         reservation_id: d.reservationId,
@@ -931,7 +1006,7 @@ export function useCreatePayment() {
         method: d.method,
         reference_no: d.referenceNo ?? null,
         note: d.note ?? null,
-        received_by: d.receivedBy ?? null,
+        received_by: receivedBy,
       });
       if (error) throw error;
       const { data: res } = await supabase

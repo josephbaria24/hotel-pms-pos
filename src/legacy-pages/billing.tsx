@@ -1,6 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
+import { useLocation, useSearch } from "wouter";
 import {
   useListPayments,
   useCreatePayment,
@@ -34,16 +35,44 @@ import {
   Select,
   SelectContent,
   SelectItem,
+  SelectItemText,
   SelectTrigger,
   SelectValue
 } from "@/components/ui/select";
-import { Plus, Receipt, MoreVertical, Edit, Trash2, Loader2, Printer } from "lucide-react";
+import { Plus, Receipt, MoreVertical, Edit, Trash2, Loader2, Printer, X } from "lucide-react";
 import { formatPhDateTime } from "@/lib/datetime";
 import { ScrollableTablePane } from "@/components/layout/ScrollableTablePane";
+import { useAuth } from "@/components/auth/AuthProvider";
+import { NumberInput, numberOrZero } from "@/components/ui/number-input";
+
+type PaymentLine = {
+  id: string;
+  label: string;
+  amount: number | "";
+};
+
+function newPaymentLine(partial?: Partial<PaymentLine>): PaymentLine {
+  return {
+    id:
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `line_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+    label: partial?.label ?? "",
+    amount: partial?.amount ?? "",
+  };
+}
 
 export default function Billing() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { user } = useAuth();
+  const [, setLocation] = useLocation();
+  const locationSearch = useSearch();
+
+  const reservationQuery = useMemo(() => {
+    const raw = locationSearch.startsWith("?") ? locationSearch.slice(1) : locationSearch;
+    return new URLSearchParams(raw).get("reservation");
+  }, [locationSearch]);
 
   const { data: payments, isLoading: isPaymentsLoading } = useListPayments();
   const { data: reservations } = useListReservations();
@@ -55,7 +84,7 @@ export default function Billing() {
   // Dialog States
   const [isRecordOpen, setIsRecordOpen] = useState(false);
   const [selectedResId, setSelectedResId] = useState("");
-  const [recordAmount, setRecordAmount] = useState("");
+  const [recordLines, setRecordLines] = useState<PaymentLine[]>(() => [newPaymentLine({ label: "Payment" })]);
   const [recordMethod, setRecordMethod] = useState("cash");
   const [recordRefNo, setRecordRefNo] = useState("");
   const [recordNote, setRecordNote] = useState("");
@@ -75,10 +104,31 @@ export default function Billing() {
     if (selectedResId && reservations) {
       const res = reservations.find((r) => r.id === selectedResId);
       if (res) {
-        setRecordAmount(String(Math.max(0, res.balance)));
+        const balance = Math.max(0, Number(res.balance || 0));
+        setRecordLines((lines) => {
+          if (lines.length === 0) return [newPaymentLine({ label: "Payment", amount: balance })];
+          return lines.map((line, i) => (i === 0 ? { ...line, amount: balance } : line));
+        });
       }
     }
   }, [selectedResId, reservations]);
+
+  const openedFromQuery = useRef(false);
+  useEffect(() => {
+    if (!reservationQuery || openedFromQuery.current) return;
+    openedFromQuery.current = true;
+    setSelectedResId(reservationQuery);
+    setIsRecordOpen(true);
+  }, [reservationQuery]);
+
+  const clearReservationQuery = () => {
+    if (!reservationQuery) return;
+    const raw = locationSearch.startsWith("?") ? locationSearch.slice(1) : locationSearch;
+    const params = new URLSearchParams(raw);
+    params.delete("reservation");
+    const qs = params.toString();
+    setLocation(qs ? `/billing?${qs}` : "/billing");
+  };
 
   // Handle Record Payment Submit
   const handleRecordSubmit = async (e: React.FormEvent) => {
@@ -91,35 +141,50 @@ export default function Billing() {
       });
       return;
     }
-    if (!recordAmount || isNaN(Number(recordAmount)) || Number(recordAmount) <= 0) {
+    const lines = recordLines
+      .map((line) => ({
+        label: line.label.trim() || "Payment",
+        amount: numberOrZero(line.amount),
+      }))
+      .filter((line) => line.amount > 0);
+    if (lines.length === 0) {
       toast({
         title: "Validation error",
-        description: "Please enter a valid amount.",
+        description: "Add at least one payment item with an amount.",
         variant: "destructive",
       });
       return;
     }
 
+    const total = lines.reduce((sum, line) => sum + line.amount, 0);
+    const breakdown = lines
+      .map((line) => `${line.label} ₱${line.amount.toFixed(2)}`)
+      .join(" · ");
+    const note = [breakdown, recordNote.trim()].filter(Boolean).join("\n");
+
     try {
       await createPaymentMutation.mutateAsync({
         data: {
           reservationId: selectedResId,
-          amount: Number(recordAmount),
+          amount: total,
           method: recordMethod,
           referenceNo: recordRefNo,
-          note: recordNote,
-          receivedBy: "Admin",
+          note,
+          receivedBy: user?.id,
         },
       });
 
       toast({
         title: "Success",
-        description: "Payment recorded successfully.",
+        description:
+          lines.length === 1
+            ? "Payment recorded successfully."
+            : `Payment of ₱${total.toFixed(2)} recorded (${lines.length} items).`,
       });
 
       // Reset & Close
       setSelectedResId("");
-      setRecordAmount("");
+      setRecordLines([newPaymentLine({ label: "Payment" })]);
       setRecordMethod("cash");
       setRecordRefNo("");
       setRecordNote("");
@@ -400,9 +465,15 @@ export default function Billing() {
   };
 
   // Get active reservations that have check-in status or balance > 0
-  const activeReservations = reservations?.filter(
-    (res) => res.status !== "checked_out" && res.status !== "cancelled"
-  ) || [];
+  const activeReservations = useMemo(() => {
+    const list = reservations ?? [];
+    const active = list.filter(
+      (res) => res.status !== "checked_out" && res.status !== "cancelled",
+    );
+    const extra = reservationQuery ? list.find((r) => r.id === reservationQuery) : undefined;
+    if (extra && !active.some((r) => r.id === extra.id)) return [extra, ...active];
+    return active;
+  }, [reservations, reservationQuery]);
 
   return (
     <div className="space-y-6">
@@ -512,16 +583,25 @@ export default function Billing() {
       </ScrollableTablePane>
 
       {/* Record Payment Dialog */}
-      <Dialog open={isRecordOpen} onOpenChange={setIsRecordOpen}>
-        <DialogContent className="max-w-md">
+      <Dialog
+        open={isRecordOpen}
+        onOpenChange={(open) => {
+          setIsRecordOpen(open);
+          if (!open) {
+            clearReservationQuery();
+            setRecordLines([newPaymentLine({ label: "Payment" })]);
+          }
+        }}
+      >
+        <DialogContent className="max-h-[85vh] max-w-md min-w-0 overflow-x-hidden overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Record Payment</DialogTitle>
           </DialogHeader>
-          <form onSubmit={handleRecordSubmit} className="space-y-4">
-            <div className="space-y-1">
+          <form onSubmit={handleRecordSubmit} className="min-w-0 space-y-4">
+            <div className="min-w-0 space-y-1">
               <label className="text-sm font-semibold">Select Reservation</label>
               <Select value={selectedResId} onValueChange={setSelectedResId}>
-                <SelectTrigger>
+                <SelectTrigger className="w-full min-w-0">
                   <SelectValue placeholder="Select active booking" />
                 </SelectTrigger>
                 <SelectContent className="max-h-64 overflow-y-auto">
@@ -531,8 +611,10 @@ export default function Billing() {
                     activeReservations
                       .filter((res) => Boolean(res.id?.trim()))
                       .map((res) => (
-                      <SelectItem key={res.id} value={res.id}>
-                        {res.reservationNumber} - {res.guestName} (Room {res.roomNumber}) - Bal: ₱{res.balance.toFixed(2)}
+                      <SelectItem key={res.id} value={res.id} className="max-w-[min(100vw-3rem,28rem)]">
+                        <SelectItemText>
+                          {res.reservationNumber} · {res.guestName} · Rm {res.roomNumber} · ₱{res.balance.toFixed(2)}
+                        </SelectItemText>
                       </SelectItem>
                     ))
                   )}
@@ -540,38 +622,91 @@ export default function Billing() {
               </Select>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1">
-                <label className="text-sm font-semibold">Amount (₱)</label>
-                <Input
-                  type="number"
-                  step="0.01"
-                  min="0.01"
-                  required
-                  placeholder="0.00"
-                  value={recordAmount}
-                  onChange={(e) => setRecordAmount(e.target.value)}
-                />
+            <div className="min-w-0 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-sm font-semibold">Payment items</label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  onClick={() => setRecordLines((lines) => [...lines, newPaymentLine()])}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Add
+                </Button>
               </div>
-
-              <div className="space-y-1">
-                <label className="text-sm font-semibold">Payment Method</label>
-                <Select value={recordMethod} onValueChange={setRecordMethod}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="cash">Cash</SelectItem>
-                    <SelectItem value="gcash">GCash</SelectItem>
-                    <SelectItem value="credit_card">Credit Card</SelectItem>
-                    <SelectItem value="bank_transfer">Bank Transfer</SelectItem>
-                    <SelectItem value="paymaya">PayMaya</SelectItem>
-                  </SelectContent>
-                </Select>
+              <div className="space-y-2">
+                {recordLines.map((line) => (
+                  <div key={line.id} className="flex min-w-0 items-center gap-2">
+                    <Input
+                      placeholder="Label, e.g. Room, Extra bed"
+                      value={line.label}
+                      onChange={(e) =>
+                        setRecordLines((lines) =>
+                          lines.map((item) =>
+                            item.id === line.id ? { ...item, label: e.target.value } : item,
+                          ),
+                        )
+                      }
+                      className="min-w-0 flex-1"
+                    />
+                    <NumberInput
+                      placeholder="0.00"
+                      min={0}
+                      step="0.01"
+                      value={line.amount}
+                      onValueChange={(value) =>
+                        setRecordLines((lines) =>
+                          lines.map((item) =>
+                            item.id === line.id ? { ...item, amount: value } : item,
+                          ),
+                        )
+                      }
+                      className="w-[7.25rem] shrink-0"
+                    />
+                    {recordLines.length > 1 ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-9 w-9 shrink-0"
+                        aria-label="Remove payment item"
+                        onClick={() =>
+                          setRecordLines((lines) => lines.filter((item) => item.id !== line.id))
+                        }
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    ) : null}
+                  </div>
+                ))}
               </div>
+              <p className="text-right text-sm font-semibold tabular-nums">
+                Total ₱
+                {recordLines
+                  .reduce((sum, line) => sum + numberOrZero(line.amount), 0)
+                  .toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </p>
             </div>
 
-            <div className="space-y-1">
+            <div className="min-w-0 space-y-1">
+              <label className="text-sm font-semibold">Payment Method</label>
+              <Select value={recordMethod} onValueChange={setRecordMethod}>
+                <SelectTrigger className="w-full min-w-0">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="cash">Cash</SelectItem>
+                  <SelectItem value="gcash">GCash</SelectItem>
+                  <SelectItem value="credit_card">Credit Card</SelectItem>
+                  <SelectItem value="bank_transfer">Bank Transfer</SelectItem>
+                  <SelectItem value="paymaya">PayMaya</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="min-w-0 space-y-1">
               <label className="text-sm font-semibold">Reference Number (Optional)</label>
               <Input
                 placeholder="e.g. GCash Trans ID, Check No."
@@ -580,7 +715,7 @@ export default function Billing() {
               />
             </div>
 
-            <div className="space-y-1">
+            <div className="min-w-0 space-y-1">
               <label className="text-sm font-semibold">Note (Optional)</label>
               <Textarea
                 placeholder="Add payment notes..."
@@ -590,7 +725,7 @@ export default function Billing() {
               />
             </div>
 
-            <DialogFooter>
+            <DialogFooter className="min-w-0 flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               <DialogClose asChild>
                 <Button type="button" variant="outline">Cancel</Button>
               </DialogClose>
@@ -611,13 +746,13 @@ export default function Billing() {
 
       {/* Edit Payment Dialog */}
       <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md min-w-0 overflow-x-hidden">
           <DialogHeader>
             <DialogTitle>Edit Payment Record</DialogTitle>
           </DialogHeader>
-          <form onSubmit={handleEditSubmit} className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1">
+          <form onSubmit={handleEditSubmit} className="min-w-0 space-y-4">
+            <div className="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="min-w-0 space-y-1">
                 <label className="text-sm font-semibold">Amount (₱)</label>
                 <Input
                   type="number"
@@ -630,10 +765,10 @@ export default function Billing() {
                 />
               </div>
 
-              <div className="space-y-1">
+              <div className="min-w-0 space-y-1">
                 <label className="text-sm font-semibold">Payment Method</label>
                 <Select value={editMethod} onValueChange={setEditMethod}>
-                  <SelectTrigger>
+                  <SelectTrigger className="w-full min-w-0">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>

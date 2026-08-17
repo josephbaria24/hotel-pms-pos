@@ -44,6 +44,7 @@ export type Guest = {
   nationality?: string | null;
   notes?: string | null;
   totalStays: number;
+  createdAt?: string | null;
 };
 
 export type Room = {
@@ -59,6 +60,8 @@ export type Room = {
   doNotDisturb: boolean;
   assignedHousekeeperId: string | null;
 };
+
+export type RoomOptionKind = "type" | "status" | "condition";
 
 export type RoomOption = {
   id: string;
@@ -92,6 +95,7 @@ export type Reservation = {
   notes: string | null;
   actualCheckInAt?: string | null;
   actualCheckOutAt?: string | null;
+  createdAt?: string | null;
 };
 
 export type Payment = {
@@ -107,6 +111,7 @@ export type Payment = {
   receiptNumber: string;
   guestName: string;
   roomNumber: string;
+  reservationNumber?: string;
 };
 
 export type Settings = {

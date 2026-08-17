@@ -9,6 +9,7 @@ import {
   useGetReservationBillData,
   getListReservationsQueryKey,
   getListRoomsQueryKey,
+  useGetSettings,
   type Reservation,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -52,7 +53,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { format } from "date-fns";
+import { format, startOfMonth } from "date-fns";
 import {
   ArrowDownRight,
   ArrowUpRight,
@@ -71,6 +72,7 @@ import {
   ArrowRightLeft,
   CalendarDays,
   CalendarRange,
+  Download,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useEffect, useMemo, useState, useRef } from "react";
@@ -81,6 +83,7 @@ import QRCode from "qrcode";
 import { formatPhDate, formatPhDateTime, formatPhTime } from "@/lib/datetime";
 import { ScrollableTablePane } from "@/components/layout/ScrollableTablePane";
 import { cn } from "@/lib/utils";
+import { countStaySummary, downloadStaySummaryPdf } from "@/lib/stays-summary-pdf";
 
 /* ───────── UI Helpers matching Dashboard style ───────── */
 
@@ -158,6 +161,7 @@ function formatRoomStatusLabel(status: string) {
 export default function CheckInOut({ embedded }: CheckInOutProps) {
   const { data: reservations, isLoading } = useListReservations();
   const { data: rooms = [] } = useListRooms();
+  const { data: settings } = useGetSettings();
   const checkInMutation = useCheckIn();
   const checkOutMutation = useCheckOut();
   const contractMutation = useGetReservationContractData();
@@ -438,6 +442,10 @@ export default function CheckInOut({ embedded }: CheckInOutProps) {
 
   const [dateFilterMode, setDateFilterMode] = useState<"all" | "specific">("all");
   const [filterDate, setFilterDate] = useState(() => format(new Date(), "yyyy-MM-dd"));
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const [summaryFrom, setSummaryFrom] = useState(() => format(startOfMonth(new Date()), "yyyy-MM-dd"));
+  const [summaryTo, setSummaryTo] = useState(() => format(new Date(), "yyyy-MM-dd"));
+  const [summaryBusy, setSummaryBusy] = useState(false);
 
   const { arrivals, departures, inHouseCount, upcomingReservedCount } = useMemo(() => {
     const list = reservations ?? [];
@@ -464,6 +472,72 @@ export default function CheckInOut({ embedded }: CheckInOutProps) {
       upcomingReservedCount: upcoming,
     };
   }, [reservations, dateFilterMode, filterDate]);
+
+  const summaryPreview = useMemo(() => {
+    if (!summaryFrom || !summaryTo || summaryFrom > summaryTo) {
+      return { reservations: 0, checkIns: 0, checkOuts: 0, occupiedRooms: 0 };
+    }
+    return countStaySummary(reservations ?? [], summaryFrom, summaryTo);
+  }, [reservations, summaryFrom, summaryTo]);
+
+  const openStaySummaryDialog = () => {
+    const today = format(new Date(), "yyyy-MM-dd");
+    if (dateFilterMode === "specific") {
+      setSummaryFrom(filterDate);
+      setSummaryTo(filterDate);
+    } else {
+      setSummaryFrom(format(startOfMonth(new Date()), "yyyy-MM-dd"));
+      setSummaryTo(today);
+    }
+    setSummaryOpen(true);
+  };
+
+  const handleDownloadStaySummary = () => {
+    if (!summaryFrom || !summaryTo) {
+      toast({
+        title: "Choose both dates",
+        description: "Pick a from and to date for the summary.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (summaryFrom > summaryTo) {
+      toast({
+        title: "Invalid date range",
+        description: "The from date must be on or before the to date.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setSummaryBusy(true);
+    try {
+      downloadStaySummaryPdf({
+        hotel: {
+          hotelName: settings?.hotelName || "PalawanSU Hotel",
+          address: settings?.address,
+          contactNumber: settings?.contactNumber,
+          email: settings?.email,
+        },
+        from: summaryFrom,
+        to: summaryTo,
+        reservations: reservations ?? [],
+        rooms,
+      });
+      toast({
+        title: "Summary downloaded",
+        description: `PDF saved for ${formatPhDate(summaryFrom)} – ${formatPhDate(summaryTo)}.`,
+      });
+      setSummaryOpen(false);
+    } catch (error) {
+      toast({
+        title: "Could not create PDF",
+        description: error instanceof Error ? error.message : "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setSummaryBusy(false);
+    }
+  };
 
   const matchesStaysSearch = (res: Reservation, q: string) => {
     const s = q.trim().toLowerCase();
@@ -1360,44 +1434,57 @@ export default function CheckInOut({ embedded }: CheckInOutProps) {
 
       {/* Date Filter & View Controls Bar */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between px-1">
-        <div className="flex items-center gap-1.5 p-1 bg-muted/40 rounded-full border max-w-xs sm:max-w-none">
-          <button
-            type="button"
-            onClick={() => setDateFilterMode("all")}
-            className={cn(
-              "rounded-full px-3 py-1.5 text-xs font-semibold tracking-wide transition-all outline-none",
-              dateFilterMode === "all"
-                ? "bg-foreground text-background shadow-sm"
-                : "text-foreground hover:bg-muted/80",
-            )}
-          >
-            All Stays
-          </button>
-          <button
-            type="button"
-            onClick={() => setDateFilterMode("specific")}
-            className={cn(
-              "rounded-full px-3 py-1.5 text-xs font-semibold tracking-wide transition-all outline-none",
-              dateFilterMode === "specific"
-                ? "bg-foreground text-background shadow-sm"
-                : "text-foreground hover:bg-muted/80",
-            )}
-          >
-            Filter by Date
-          </button>
+        <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center">
+          <div className="flex items-center gap-1.5 p-1 bg-muted/40 rounded-full border max-w-xs sm:max-w-none">
+            <button
+              type="button"
+              onClick={() => setDateFilterMode("all")}
+              className={cn(
+                "rounded-full px-3 py-1.5 text-xs font-semibold tracking-wide transition-all outline-none",
+                dateFilterMode === "all"
+                  ? "bg-foreground text-background shadow-sm"
+                  : "text-foreground hover:bg-muted/80",
+              )}
+            >
+              All Stays
+            </button>
+            <button
+              type="button"
+              onClick={() => setDateFilterMode("specific")}
+              className={cn(
+                "rounded-full px-3 py-1.5 text-xs font-semibold tracking-wide transition-all outline-none",
+                dateFilterMode === "specific"
+                  ? "bg-foreground text-background shadow-sm"
+                  : "text-foreground hover:bg-muted/80",
+              )}
+            >
+              Filter by Date
+            </button>
+          </div>
+
+          {dateFilterMode === "specific" && (
+            <div className="flex items-center gap-2 animate-in fade-in slide-in-from-left-2 duration-200">
+              <span className="text-xs font-medium text-muted-foreground">Select date:</span>
+              <Input
+                type="date"
+                value={filterDate}
+                onChange={(e) => setFilterDate(e.target.value)}
+                className="h-9 w-[150px] rounded-full border bg-card text-xs shadow-sm cursor-pointer"
+              />
+            </div>
+          )}
         </div>
 
-        {dateFilterMode === "specific" && (
-          <div className="flex items-center gap-2 animate-in fade-in slide-in-from-left-2 duration-200">
-            <span className="text-xs font-medium text-muted-foreground">Select date:</span>
-            <Input
-              type="date"
-              value={filterDate}
-              onChange={(e) => setFilterDate(e.target.value)}
-              className="h-9 w-[150px] rounded-full border bg-card text-xs shadow-sm cursor-pointer"
-            />
-          </div>
-        )}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={openStaySummaryDialog}
+          className="h-9 shrink-0 self-start rounded-full px-4 text-xs font-semibold sm:self-auto"
+        >
+          <Download className="h-3.5 w-3.5" />
+          Download Summary
+        </Button>
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -1648,6 +1735,70 @@ export default function CheckInOut({ embedded }: CheckInOutProps) {
           </div>
         </InnerCard>
       </div>
+
+      <Dialog open={summaryOpen} onOpenChange={setSummaryOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Download stay summary</DialogTitle>
+            <DialogDescription>
+              Choose a from and to date. The PDF lists reservations, check-ins, check-outs, and guests in each room for that range.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-1">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="stay-summary-from">From</Label>
+                <Input
+                  id="stay-summary-from"
+                  type="date"
+                  value={summaryFrom}
+                  max={summaryTo || undefined}
+                  onChange={(e) => setSummaryFrom(e.target.value)}
+                  className="h-9 cursor-pointer"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="stay-summary-to">To</Label>
+                <Input
+                  id="stay-summary-to"
+                  type="date"
+                  value={summaryTo}
+                  min={summaryFrom || undefined}
+                  onChange={(e) => setSummaryTo(e.target.value)}
+                  className="h-9 cursor-pointer"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <div className="rounded-xl border bg-muted/30 px-3 py-2">
+                <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Reservations</p>
+                <p className="mt-0.5 text-lg font-bold tabular-nums">{summaryPreview.reservations}</p>
+              </div>
+              <div className="rounded-xl border bg-muted/30 px-3 py-2">
+                <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Check-ins</p>
+                <p className="mt-0.5 text-lg font-bold tabular-nums text-emerald-700">{summaryPreview.checkIns}</p>
+              </div>
+              <div className="rounded-xl border bg-muted/30 px-3 py-2">
+                <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Check-outs</p>
+                <p className="mt-0.5 text-lg font-bold tabular-nums text-blue-700">{summaryPreview.checkOuts}</p>
+              </div>
+              <div className="rounded-xl border bg-muted/30 px-3 py-2">
+                <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Rooms</p>
+                <p className="mt-0.5 text-lg font-bold tabular-nums text-amber-700">{summaryPreview.occupiedRooms}</p>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setSummaryOpen(false)} disabled={summaryBusy}>
+              Cancel
+            </Button>
+            <Button type="button" onClick={handleDownloadStaySummary} disabled={summaryBusy}>
+              {summaryBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+              {summaryBusy ? "Preparing…" : "Download PDF"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={Boolean(transferRes)}

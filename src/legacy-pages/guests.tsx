@@ -12,20 +12,10 @@ import {
   prefetchGuestHubDirectoryData,
   type Guest,
 } from "@workspace/api-client-react";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectItemText,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
@@ -45,28 +35,16 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
-  Search,
-  Plus,
-  BookUser,
-  MoreHorizontal,
-  Eye,
-  Pencil,
-  Trash2,
   CalendarDays,
   ArrowLeftRight,
   Loader2,
+  Wallet,
 } from "lucide-react";
-import { ScrollableTablePane } from "@/components/layout/ScrollableTablePane";
 import { cn } from "@/lib/utils";
 import Reservations from "@/legacy-pages/reservations";
 import CheckInOut from "@/legacy-pages/checkin";
 import { useToast } from "@/hooks/use-toast";
+import { GuestFolioPanel } from "@/components/guests/GuestFolioPanel";
 
 type GuestTab = "directory" | "bookings" | "stays";
 
@@ -128,10 +106,10 @@ const TAB_META: Record<
     badgeClass: "bg-white/20 text-white border-white/30",
   },
   directory: {
-    label: "Guest directory",
-    shortLabel: "Directory",
-    hint: "Names, contacts, stay counts",
-    icon: BookUser,
+    label: "Guest Folio",
+    shortLabel: "Folio",
+    hint: "Stays, bills, and payments",
+    icon: Wallet,
     activeClass: "bg-foreground text-background shadow-sm",
     badgeClass: "bg-background/20 text-background border-background/30",
   },
@@ -153,6 +131,7 @@ export default function Guests() {
 
   const { tab: activeTab, params: urlParams } = useMemo(() => parseGuestHubSearch(search), [search]);
   const directoryQuery = urlParams.get("q") ?? "";
+  const selectedGuestId = urlParams.get("guest");
 
   // Warm cache once so tab switches do not wait on first fetch.
   useEffect(() => {
@@ -204,19 +183,23 @@ export default function Guests() {
       (r) => r.status === "checked_in" && r.checkOutDate.slice(0, 10) === today,
     ).length;
     const reservedBookings = list.filter((r) => r.status === "reserved").length;
-    const newDirectory = (guests ?? []).filter((g) => (g.totalStays ?? 0) === 0).length;
+    const outstandingFolios = (guests ?? []).filter((g) => {
+      const due = (reservations ?? [])
+        .filter((r) => r.guestId === g.id && r.status !== "cancelled" && r.status !== "no_show")
+        .reduce((sum, r) => sum + Number(r.balance || 0), 0);
+      return due > 0;
+    }).length;
 
     return {
       stays: arrivalsToday + departuresToday,
       bookings: reservedBookings,
-      directory: newDirectory,
+      directory: outstandingFolios,
     } as Record<GuestTab, number>;
   }, [reservations, guests]);
 
   const [directoryStaysFilter, setDirectoryStaysFilter] = useState<"all" | "has" | "none">("all");
   const [directorySort, setDirectorySort] = useState<"name" | "stays_desc" | "stays_asc">("name");
 
-  const [viewGuest, setViewGuest] = useState<Guest | null>(null);
   const [editGuest, setEditGuest] = useState<Guest | null>(null);
   const [editForm, setEditForm] = useState({ firstName: "", lastName: "", contactNumber: "", email: "" });
   const [deleteGuest, setDeleteGuest] = useState<Guest | null>(null);
@@ -263,7 +246,10 @@ export default function Guests() {
       startTransition(() => {
         const p = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
         p.set("tab", next);
-        if (next !== "directory") p.delete("q");
+        if (next !== "directory") {
+          p.delete("q");
+          p.delete("guest");
+        }
         if (next !== "bookings") p.delete("search");
         const qs = p.toString();
         setLocation(qs ? `/guests?${qs}` : "/guests");
@@ -287,6 +273,21 @@ export default function Guests() {
     [search, setLocation],
   );
 
+  const setSelectedGuest = useCallback(
+    (id: string | null) => {
+      startTransition(() => {
+        const p = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
+        p.set("tab", "directory");
+        p.delete("search");
+        if (id) p.set("guest", id);
+        else p.delete("guest");
+        const qs = p.toString();
+        setLocation(qs ? `/guests?${qs}` : "/guests");
+      });
+    },
+    [search, setLocation],
+  );
+
   const prefetchTab = useCallback(
     (id: GuestTab) => {
       if (id === "directory") void prefetchGuestHubDirectoryData(queryClient);
@@ -295,28 +296,6 @@ export default function Guests() {
     },
     [queryClient],
   );
-
-  const filtered = useMemo(() => {
-    const list = guests ?? [];
-    const q = directoryQuery.trim().toLowerCase();
-    let out = list.filter((g) => {
-      const matchesQ =
-        !q ||
-        g.fullName.toLowerCase().includes(q) ||
-        (g.contactNumber || "").toLowerCase().includes(q) ||
-        (g.email || "").toLowerCase().includes(q);
-      if (!matchesQ) return false;
-      if (directoryStaysFilter === "has") return g.totalStays > 0;
-      if (directoryStaysFilter === "none") return g.totalStays === 0;
-      return true;
-    });
-    out = [...out].sort((a, b) => {
-      if (directorySort === "name") return a.fullName.localeCompare(b.fullName, undefined, { sensitivity: "base" });
-      if (directorySort === "stays_desc") return b.totalStays - a.totalStays || a.fullName.localeCompare(b.fullName);
-      return a.totalStays - b.totalStays || a.fullName.localeCompare(b.fullName);
-    });
-    return out;
-  }, [guests, directoryQuery, directoryStaysFilter, directorySort]);
 
   const saveGuestEdit = async () => {
     if (!editGuest) return;
@@ -366,7 +345,7 @@ export default function Guests() {
           <div>
             <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Guests &amp; Stays</h1>
             <p className="text-sm text-muted-foreground mt-0.5">
-              Manage hostel resident directory, check-ins, check-outs, and bookings.
+              Manage guest folios, check-ins, check-outs, and bookings.
             </p>
           </div>
 
@@ -486,7 +465,7 @@ export default function Guests() {
           </div>
         ) : null}
 
-        {/* Directory Panel: always mounted; hidden when another tab is active (cheap vs heavy tabs). */}
+        {/* Folio Panel: always mounted; hidden when another tab is active. */}
         <section
           role="tabpanel"
           id="guests-panel-directory"
@@ -494,138 +473,22 @@ export default function Guests() {
           className={cn("space-y-3", activeTab !== "directory" && "hidden")}
           aria-hidden={activeTab !== "directory"}
         >
-          <div className="rounded-2xl border border-slate-200/80 bg-card p-3 shadow-sm space-y-3">
-            <div className="flex flex-col gap-3 xl:flex-row xl:flex-wrap xl:items-center xl:justify-between">
-              <div className="relative max-w-md flex-1 min-w-[200px]">
-                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  id="tab-directory"
-                  placeholder="Search by name, phone, or email…"
-                  className="h-9 rounded-full border bg-card pl-9 text-xs"
-                  value={directoryQuery}
-                  onChange={(e) => setDirectoryQuery(e.target.value)}
-                />
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Select value={directoryStaysFilter} onValueChange={(v) => setDirectoryStaysFilter(v as typeof directoryStaysFilter)}>
-                  <SelectTrigger className="h-9 w-[150px] rounded-full bg-card text-xs">
-                    <SelectValue placeholder="Stays" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">
-                      <SelectItemText>All residents</SelectItemText>
-                    </SelectItem>
-                    <SelectItem value="has">
-                      <SelectItemText>With past stays</SelectItemText>
-                    </SelectItem>
-                    <SelectItem value="none">
-                      <SelectItemText>No completed stays</SelectItemText>
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-                <Select value={directorySort} onValueChange={(v) => setDirectorySort(v as typeof directorySort)}>
-                  <SelectTrigger className="h-9 w-[155px] rounded-full bg-card text-xs">
-                    <SelectValue placeholder="Sort" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="name">
-                      <SelectItemText>Sort: Name (A–Z)</SelectItemText>
-                    </SelectItem>
-                    <SelectItem value="stays_desc">
-                      <SelectItemText>Sort: Most stays</SelectItemText>
-                    </SelectItem>
-                    <SelectItem value="stays_asc">
-                      <SelectItemText>Sort: Fewest stays</SelectItemText>
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-                <Button type="button" className="h-9 shrink-0 rounded-full text-xs" variant="secondary">
-                  <Plus className="mr-2 h-4 w-4" />
-                  Add Resident
-                </Button>
-              </div>
-            </div>
-
-            <ScrollableTablePane offsetRem={14} minVh={28} className="rounded-xl border">
-              <Table>
-                <TableHeader className="sticky top-0 z-[1] bg-muted/90 shadow-sm">
-                  <TableRow>
-                    <TableHead className="text-xs">Name</TableHead>
-                    <TableHead className="text-xs">Contact</TableHead>
-                    <TableHead className="text-xs">Email</TableHead>
-                    <TableHead className="text-xs">Total stays</TableHead>
-                    <TableHead className="text-right w-[100px] text-xs">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {isLoading ? (
-                    Array.from({ length: 5 }).map((_, i) => (
-                      <TableRow key={i}>
-                        <TableCell>
-                          <Skeleton className="h-4 w-[150px]" />
-                        </TableCell>
-                        <TableCell>
-                          <Skeleton className="h-4 w-[100px]" />
-                        </TableCell>
-                        <TableCell>
-                          <Skeleton className="h-4 w-[150px]" />
-                        </TableCell>
-                        <TableCell>
-                          <Skeleton className="h-4 w-[50px]" />
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <Skeleton className="ml-auto h-8 w-[80px]" />
-                        </TableCell>
-                      </TableRow>
-                    ))
-                  ) : filtered.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={5} className="py-10 text-center text-muted-foreground text-xs">
-                        {guests?.length === 0
-                          ? "No residents yet. Add a resident profile to begin."
-                          : "No residents match your filters."}
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    filtered.map((guest) => (
-                      <TableRow key={guest.id} className="hover:bg-muted/40">
-                        <TableCell className="font-semibold text-xs py-2.5">{guest.fullName}</TableCell>
-                        <TableCell className="text-xs py-2.5">{guest.contactNumber || "—"}</TableCell>
-                        <TableCell className="max-w-[220px] truncate text-xs py-2.5">{guest.email || "—"}</TableCell>
-                        <TableCell className="text-xs py-2.5">{guest.totalStays}</TableCell>
-                        <TableCell className="text-right py-2.5">
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Guest actions">
-                                <MoreHorizontal className="h-4 w-4" />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end" className="w-44">
-                              <DropdownMenuItem onClick={() => setViewGuest(guest)}>
-                                <Eye className="mr-2 h-4 w-4" />
-                                View
-                              </DropdownMenuItem>
-                              <DropdownMenuItem onClick={() => setEditGuest(guest)}>
-                                <Pencil className="mr-2 h-4 w-4" />
-                                Edit
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                className="text-destructive focus:text-destructive"
-                                onClick={() => setDeleteGuest(guest)}
-                              >
-                                <Trash2 className="mr-2 h-4 w-4" />
-                                Delete
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </TableCell>
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
-            </ScrollableTablePane>
-          </div>
+          <GuestFolioPanel
+            guests={guests}
+            reservations={reservations}
+            isLoading={isLoading}
+            searchQuery={directoryQuery}
+            onSearchQueryChange={setDirectoryQuery}
+            staysFilter={directoryStaysFilter}
+            onStaysFilterChange={setDirectoryStaysFilter}
+            sort={directorySort}
+            onSortChange={setDirectorySort}
+            selectedGuestId={selectedGuestId}
+            onSelectGuest={setSelectedGuest}
+            onEditGuest={setEditGuest}
+            onDeleteGuest={setDeleteGuest}
+            active={activeTab === "directory"}
+          />
         </section>
 
         {heavyPanelsMounted.bookings ? (
@@ -662,40 +525,6 @@ export default function Guests() {
           </div>
         ) : null}
       </div>
-
-      <Dialog open={Boolean(viewGuest)} onOpenChange={(o) => !o && setViewGuest(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Guest profile</DialogTitle>
-            <DialogDescription>Read-only details from your directory.</DialogDescription>
-          </DialogHeader>
-          {viewGuest ? (
-            <div className="space-y-2 text-sm">
-              <div>
-                <span className="text-muted-foreground">Name</span>
-                <p className="font-medium">{viewGuest.fullName}</p>
-              </div>
-              <div>
-                <span className="text-muted-foreground">Phone</span>
-                <p>{viewGuest.contactNumber || "—"}</p>
-              </div>
-              <div>
-                <span className="text-muted-foreground">Email</span>
-                <p className="break-all">{viewGuest.email || "—"}</p>
-              </div>
-              <div>
-                <span className="text-muted-foreground">Completed stays</span>
-                <p>{viewGuest.totalStays}</p>
-              </div>
-            </div>
-          ) : null}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setViewGuest(null)}>
-              Close
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       <Dialog open={Boolean(editGuest)} onOpenChange={(o) => !o && setEditGuest(null)}>
         <DialogContent>
