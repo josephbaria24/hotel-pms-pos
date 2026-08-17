@@ -1,6 +1,12 @@
 import { jsPDF } from "jspdf";
 import type { Reservation, Room } from "@/lib/api-client/types";
-import { formatPhDate, formatPhDateTime, staysOverlap } from "@/lib/datetime";
+import { formatPhDate, formatPhDateTime } from "@/lib/datetime";
+import {
+  dateInRange,
+  isCancelled,
+  stayOverlapsRange,
+  ymd,
+} from "@/lib/stays-summary-stats";
 
 export type StaySummaryHotel = {
   hotelName: string;
@@ -39,29 +45,6 @@ const STATUS_RGB: Record<string, Rgb> = {
   cancelled: [185, 28, 28],
   no_show: [113, 113, 122],
 };
-
-function ymd(value: string): string {
-  return value.slice(0, 10);
-}
-
-function dayAfter(date: string): string {
-  const [y, m, d] = ymd(date).split("-").map(Number);
-  const dt = new Date(Date.UTC(y, (m ?? 1) - 1, (d ?? 1) + 1));
-  return dt.toISOString().slice(0, 10);
-}
-
-function stayOverlapsRange(res: Reservation, from: string, to: string): boolean {
-  return staysOverlap(ymd(res.checkInDate), ymd(res.checkOutDate), from, dayAfter(to));
-}
-
-function dateInRange(iso: string, from: string, to: string): boolean {
-  const day = ymd(iso);
-  return day >= from && day <= to;
-}
-
-function isCancelled(status: string): boolean {
-  return status === "cancelled" || status === "no_show";
-}
 
 function statusLabel(status: string): string {
   return status.replace(/_/g, " ");
@@ -402,24 +385,6 @@ function addFooters(doc: jsPDF, hotelName: string, rangeLabel: string) {
     );
     doc.text(`Page ${i} of ${total}`, PAGE_W - MX, PAGE_H - 7.5, { align: "right" });
   }
-}
-
-export function countStaySummary(reservations: Reservation[], from: string, to: string) {
-  const list = reservations.filter((r) => stayOverlapsRange(r, from, to));
-  const active = list.filter((r) => !isCancelled(r.status));
-  const checkIns = reservations.filter(
-    (r) => !isCancelled(r.status) && dateInRange(r.checkInDate, from, to),
-  );
-  const checkOuts = reservations.filter(
-    (r) => !isCancelled(r.status) && dateInRange(r.checkOutDate, from, to),
-  );
-  const occupiedRooms = new Set(active.map((r) => r.roomNumber)).size;
-  return {
-    reservations: list.length,
-    checkIns: checkIns.length,
-    checkOuts: checkOuts.length,
-    occupiedRooms,
-  };
 }
 
 export function downloadStaySummaryPdf(opts: {

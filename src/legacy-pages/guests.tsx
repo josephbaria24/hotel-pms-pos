@@ -1,4 +1,7 @@
+"use client";
+
 import { useMemo, useCallback, useState, useEffect, startTransition } from "react";
+import dynamic from "next/dynamic";
 import { useSearch, useLocation } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -41,10 +44,27 @@ import {
   Wallet,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import Reservations from "@/legacy-pages/reservations";
-import CheckInOut from "@/legacy-pages/checkin";
 import { useToast } from "@/hooks/use-toast";
 import { GuestFolioPanel } from "@/components/guests/GuestFolioPanel";
+
+function HubPanelFallback({ label }: { label: string }) {
+  return (
+    <div className="flex min-h-[40vh] items-center justify-center gap-2 text-sm text-muted-foreground">
+      <Loader2 className="h-4 w-4 animate-spin" />
+      {label}
+    </div>
+  );
+}
+
+const Reservations = dynamic(() => import("@/legacy-pages/reservations"), {
+  ssr: false,
+  loading: () => <HubPanelFallback label="Preparing bookings…" />,
+});
+
+const CheckInOut = dynamic(() => import("@/legacy-pages/checkin"), {
+  ssr: false,
+  loading: () => <HubPanelFallback label="Preparing check-ins…" />,
+});
 
 type GuestTab = "directory" | "bookings" | "stays";
 
@@ -120,11 +140,21 @@ export default function Guests() {
   const [, setLocation] = useLocation();
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const { data: guests, isLoading, isFetching: guestsFetching } = useListGuests();
+  const {
+    data: guests,
+    isLoading,
+    isFetching: guestsFetching,
+    isError: guestsError,
+    error: guestsErr,
+    refetch: refetchGuests,
+  } = useListGuests();
   const {
     data: reservations,
     isLoading: reservationsLoading,
     isFetching: reservationsFetching,
+    isError: reservationsError,
+    error: reservationsErr,
+    refetch: refetchReservations,
   } = useListReservations();
   const updateGuestMutation = useUpdateGuest();
   const deleteGuestMutation = useDeleteGuest();
@@ -133,19 +163,10 @@ export default function Guests() {
   const directoryQuery = urlParams.get("q") ?? "";
   const selectedGuestId = urlParams.get("guest");
 
-  // Warm cache once so tab switches do not wait on first fetch.
+  // Warm directory cache; heavy tabs prefetch their own data when opened or hovered.
   useEffect(() => {
     void prefetchGuestHubDirectoryData(queryClient);
-    void prefetchGuestHubBookingsData(queryClient);
-    void prefetchGuestHubStaysData(queryClient);
   }, [queryClient]);
-
-  // Keep all hub panels mounted after first visit to this page (instant tab switches).
-  const [panelsReady, setPanelsReady] = useState(false);
-  useEffect(() => {
-    const id = window.setTimeout(() => setPanelsReady(true), 0);
-    return () => window.clearTimeout(id);
-  }, []);
 
   const tabLoading = useMemo(
     () =>
@@ -231,12 +252,6 @@ export default function Guests() {
     }
   }, [activeTab]);
 
-  // Also mount the other heavy panels in the background after paint.
-  useEffect(() => {
-    if (!panelsReady) return;
-    setHeavyPanelsMounted({ bookings: true, stays: true });
-  }, [panelsReady]);
-
   const setHubTab = useCallback(
     (next: GuestTab) => {
       // Mount target panel before navigating so content is ready.
@@ -291,8 +306,14 @@ export default function Guests() {
   const prefetchTab = useCallback(
     (id: GuestTab) => {
       if (id === "directory") void prefetchGuestHubDirectoryData(queryClient);
-      if (id === "bookings") void prefetchGuestHubBookingsData(queryClient);
-      if (id === "stays") void prefetchGuestHubStaysData(queryClient);
+      if (id === "bookings") {
+        void import("@/legacy-pages/reservations");
+        void prefetchGuestHubBookingsData(queryClient);
+      }
+      if (id === "stays") {
+        void import("@/legacy-pages/checkin");
+        void prefetchGuestHubStaysData(queryClient);
+      }
     },
     [queryClient],
   );
@@ -457,6 +478,28 @@ export default function Guests() {
             })}
           </div>
         </div>
+
+        {guestsError || reservationsError ? (
+          <div className="flex flex-col gap-2 rounded-2xl border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-destructive">
+              {(guestsErr instanceof Error && guestsErr.message) ||
+                (reservationsErr instanceof Error && reservationsErr.message) ||
+                "Could not load guest or booking data."}
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 shrink-0"
+              onClick={() => {
+                void refetchGuests();
+                void refetchReservations();
+              }}
+            >
+              Retry
+            </Button>
+          </div>
+        ) : null}
 
         {tabLoading[activeTab] ? (
           <div className="flex items-center gap-2 rounded-2xl border border-border/60 bg-card/80 px-3 py-2 text-xs text-muted-foreground">

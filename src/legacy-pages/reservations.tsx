@@ -1,3 +1,5 @@
+"use client";
+
 import { useState, useEffect, useMemo, useRef } from "react";
 import { toast } from "sonner";
 import { useSearch, useLocation } from "wouter";
@@ -63,8 +65,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import html2canvas from "html2canvas";
-import QRCode from "qrcode";
 
 type ReservationsProps = {
   /** When true, hide the large page title (used inside Guests hub). */
@@ -469,6 +469,7 @@ export default function Reservations({ embedded }: ReservationsProps) {
       if (document.fonts?.ready) {
         await document.fonts.ready.catch(() => {});
       }
+      const html2canvas = (await import("html2canvas")).default;
       const canvas = await html2canvas(container, {
         scale: 2,
         useCORS: true,
@@ -758,6 +759,7 @@ export default function Reservations({ embedded }: ReservationsProps) {
         `Stay: ${data.checkInDate} to ${data.checkOutDate}`,
         `Balance: ${getCurrencySymbol(data.currency)}${Number(data.balance).toFixed(2)}`,
       ].join("\n");
+      const QRCode = (await import("qrcode")).default;
       const qr = await QRCode.toDataURL(qrPayload, {
         width: 256,
         margin: 1,

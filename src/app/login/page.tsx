@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, Loader2 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import {
   ACCOUNT_INACTIVE_MESSAGE,
@@ -15,6 +15,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 import {
   Card,
   CardContent,
@@ -125,7 +126,6 @@ export default function LoginPage() {
       return;
     }
 
-    setLoading(false);
     router.push("/dashboard");
     router.refresh();
   }
@@ -136,7 +136,27 @@ export default function LoginPage() {
         className="absolute inset-0 scale-105 bg-cover bg-center bg-no-repeat blur-[3px]"
         style={{ backgroundImage: "url('/loginbg.png')" }}
       />
-      <div className="absolute inset-0 bg-black/25" />
+      <div
+        className={cn(
+          "absolute inset-0 bg-black/25 transition-colors",
+          loading && "z-20 bg-black/55",
+        )}
+        aria-hidden={!loading}
+      />
+      {loading ? (
+        <div
+          className="absolute inset-0 z-30 flex items-center justify-center"
+          role="status"
+          aria-live="polite"
+          aria-label="Signing in"
+        >
+          <div className="flex flex-col items-center gap-3 rounded-2xl border border-white/10 bg-slate-950/80 px-8 py-6 text-white shadow-2xl backdrop-blur-md">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            <p className="text-sm font-semibold tracking-wide">Signing in…</p>
+            <p className="text-xs text-white/70">Please wait</p>
+          </div>
+        </div>
+      ) : null}
       <Card className="z-10 w-full max-w-md border-none bg-card/95 shadow-2xl backdrop-blur-sm">
         <CardHeader className="space-y-3 px-6 pb-6 pt-8 text-center sm:px-10 sm:pb-8 sm:pt-10">
           <div className="mb-2 flex justify-center">

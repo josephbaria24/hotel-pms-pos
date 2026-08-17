@@ -1,3 +1,5 @@
+"use client";
+
 import {
   useListReservations,
   useListRooms,
@@ -78,12 +80,10 @@ import { useToast } from "@/hooks/use-toast";
 import { useEffect, useMemo, useState, useRef } from "react";
 import { toast as sonnerToast } from "sonner";
 import { sileo } from "sileo";
-import html2canvas from "html2canvas";
-import QRCode from "qrcode";
 import { formatPhDate, formatPhDateTime, formatPhTime } from "@/lib/datetime";
 import { ScrollableTablePane } from "@/components/layout/ScrollableTablePane";
 import { cn } from "@/lib/utils";
-import { countStaySummary, downloadStaySummaryPdf } from "@/lib/stays-summary-pdf";
+import { countStaySummary } from "@/lib/stays-summary-stats";
 
 /* ───────── UI Helpers matching Dashboard style ───────── */
 
@@ -492,7 +492,7 @@ export default function CheckInOut({ embedded }: CheckInOutProps) {
     setSummaryOpen(true);
   };
 
-  const handleDownloadStaySummary = () => {
+  const handleDownloadStaySummary = async () => {
     if (!summaryFrom || !summaryTo) {
       toast({
         title: "Choose both dates",
@@ -511,6 +511,7 @@ export default function CheckInOut({ embedded }: CheckInOutProps) {
     }
     setSummaryBusy(true);
     try {
+      const { downloadStaySummaryPdf } = await import("@/lib/stays-summary-pdf");
       downloadStaySummaryPdf({
         hotel: {
           hotelName: settings?.hotelName || "PalawanSU Hotel",
@@ -996,6 +997,7 @@ export default function CheckInOut({ embedded }: CheckInOutProps) {
       if (document.fonts?.ready) {
         await document.fonts.ready.catch(() => {});
       }
+      const html2canvas = (await import("html2canvas")).default;
       const canvas = await html2canvas(container, {
         scale: 2,
         useCORS: true,
@@ -1030,6 +1032,7 @@ export default function CheckInOut({ embedded }: CheckInOutProps) {
         `Stay: ${data.checkInDate} to ${data.checkOutDate}`,
         `Balance: ${getCurrencySymbol(data.currency)}${Number(data.balance).toFixed(2)}`,
       ].join("\n");
+      const QRCode = (await import("qrcode")).default;
       const qr = await QRCode.toDataURL(qrPayload, {
         width: 256,
         margin: 1,
@@ -1105,6 +1108,7 @@ export default function CheckInOut({ embedded }: CheckInOutProps) {
       const nodeToRender = container.querySelector(".pdf-root") as HTMLElement | null;
       if (!nodeToRender) throw new Error("Receipt node missing");
 
+      const html2canvas = (await import("html2canvas")).default;
       const canvas = await html2canvas(nodeToRender, {
         scale: 3,
         useCORS: true,
