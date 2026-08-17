@@ -54,7 +54,7 @@ type FormState = {
 const emptyForm: FormState = {
   name: "",
   zone: "Dining",
-  seats: "4",
+  seats: "",
   status: "available",
   notes: "",
 };
@@ -302,6 +302,7 @@ export function PosTablesView() {
               <Input
                 type="number"
                 min={1}
+                placeholder="4"
                 value={form.seats}
                 onChange={(e) => setForm((f) => ({ ...f, seats: e.target.value }))}
               />

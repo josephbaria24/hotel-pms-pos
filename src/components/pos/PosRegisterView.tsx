@@ -16,6 +16,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { NumberInput, numberOrZero } from "@/components/ui/number-input";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   Dialog,
   DialogContent,
@@ -27,6 +33,7 @@ import {
   Select,
   SelectContent,
   SelectItem,
+  SelectItemText,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -63,6 +70,39 @@ export function PosRegisterView() {
   const { data: categories = [] } = usePosCategories();
   const { data: tables = [] } = usePosTables();
   const { data: rooms = [] } = useListRooms();
+
+  const uniqueTables = useMemo(() => {
+    const seen = new Set<string>();
+    return tables.filter((t) => {
+      if (t.status === "inactive" || !t.id?.trim()) return false;
+      const key = t.name.trim().toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [tables]);
+
+  const uniqueRooms = useMemo(() => {
+    const seen = new Set<string>();
+    return rooms.filter((r) => {
+      if (!r.id?.trim()) return false;
+      const key = r.roomNumber.trim().toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [rooms]);
+
+  const uniqueCategories = useMemo(() => {
+    const seen = new Set<string>();
+    return categories.filter((c) => {
+      if (!c.id?.trim() || !c.isActive) return false;
+      const key = c.name.trim().toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [categories]);
   const { data: settings } = useGetSettings();
   const { data: resumeOrder } = usePosOrder(resumeId);
   const saveOrder = useSavePosOrder();
@@ -75,7 +115,7 @@ export function PosRegisterView() {
   const [tableId, setTableId] = useState<string>("");
   const [roomId, setRoomId] = useState<string>("");
   const [customerName, setCustomerName] = useState("");
-  const [discount, setDiscount] = useState(0);
+  const [discount, setDiscount] = useState<number | "">("");
   const [notes, setNotes] = useState("");
   const [chargeOpen, setChargeOpen] = useState(false);
   const [payMethod, setPayMethod] = useState<PosPaymentMethod>("cash");
@@ -91,7 +131,9 @@ export function PosRegisterView() {
     setTableId(resumeOrder.tableId ?? "");
     setRoomId(resumeOrder.roomId ?? "");
     setCustomerName(resumeOrder.customerName ?? "");
-    setDiscount(resumeOrder.discountAmount);
+    setDiscount(
+      resumeOrder.discountAmount === 0 ? "" : resumeOrder.discountAmount,
+    );
     setNotes(resumeOrder.notes ?? "");
     setCart(
       resumeOrder.items.map((item) => ({
@@ -113,21 +155,29 @@ export function PosRegisterView() {
 
   const activeProducts = useMemo(() => {
     const q = query.trim().toLowerCase();
+    const selectedCategory = uniqueCategories.find((c) => c.id === categoryId);
     return products.filter((p) => {
       if (!p.isActive) return false;
       if (categoryId === "quick" && !p.isQuickSell) return false;
-      if (categoryId !== "all" && categoryId !== "quick" && p.categoryId !== categoryId)
-        return false;
+      if (categoryId !== "all" && categoryId !== "quick") {
+        const sameId = p.categoryId === categoryId;
+        const sameName =
+          !!selectedCategory &&
+          (p.categoryName ?? "").trim().toLowerCase() ===
+            selectedCategory.name.trim().toLowerCase();
+        if (!sameId && !sameName) return false;
+      }
       if (!q) return true;
       return (
         p.name.toLowerCase().includes(q) ||
         (p.sku ?? "").toLowerCase().includes(q)
       );
     });
-  }, [products, categoryId, query]);
+  }, [products, uniqueCategories, categoryId, query]);
 
   const subtotal = cart.reduce((s, l) => s + l.unitPrice * l.quantity, 0);
-  const discountClamped = Math.min(Math.max(0, discount), subtotal);
+  const discountValue = numberOrZero(discount);
+  const discountClamped = Math.min(Math.max(0, discountValue), subtotal);
   const taxable = Math.max(0, subtotal - discountClamped);
   const taxAmount = Math.round(taxable * (taxRate / 100) * 100) / 100;
   const total = Math.round((taxable + taxAmount) * 100) / 100;
@@ -177,7 +227,7 @@ export function PosRegisterView() {
   const clearTicket = () => {
     setCart([]);
     setOrderId(null);
-    setDiscount(0);
+    setDiscount("");
     setNotes("");
     setCustomerName("");
     setCashTendered("");
@@ -278,9 +328,7 @@ export function PosRegisterView() {
                 onClick={() => setCategoryId("quick")}
                 label="Quick"
               />
-              {categories
-                .filter((c) => c.isActive)
-                .map((c) => (
+              {uniqueCategories.map((c) => (
                   <FilterChip
                     key={c.id}
                     active={categoryId === c.id}
@@ -353,7 +401,7 @@ export function PosRegisterView() {
                   onValueChange={(v) => setOrderType(v as PosOrderType)}
                 >
                   <SelectTrigger>
-                    <SelectValue />
+                    <SelectValue placeholder="Select order type" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="walk_in">Walk-in</SelectItem>
@@ -379,12 +427,14 @@ export function PosRegisterView() {
                       <SelectValue placeholder="Select table" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="none">No table</SelectItem>
-                      {tables
-                        .filter((t) => t.status !== "inactive" && Boolean(t.id?.trim()))
-                        .map((t) => (
+                      <SelectItem value="none">
+                        <SelectItemText>No table</SelectItemText>
+                      </SelectItem>
+                      {uniqueTables.map((t) => (
                           <SelectItem key={t.id} value={t.id}>
-                            {t.name} · {t.zone} ({t.status})
+                            <SelectItemText>
+                              {t.name} · {t.zone} ({t.status})
+                            </SelectItemText>
                           </SelectItem>
                         ))}
                     </SelectContent>
@@ -399,12 +449,14 @@ export function PosRegisterView() {
                       <SelectValue placeholder="Select room" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="none">No room</SelectItem>
-                      {rooms
-                        .filter((r) => Boolean(r.id?.trim()))
-                        .map((r) => (
+                      <SelectItem value="none">
+                        <SelectItemText>No room</SelectItemText>
+                      </SelectItem>
+                      {uniqueRooms.map((r) => (
                         <SelectItem key={r.id} value={r.id}>
-                          Room {r.roomNumber} · {r.status}
+                          <SelectItemText>
+                            Room {r.roomNumber} · {r.status}
+                          </SelectItemText>
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -433,40 +485,55 @@ export function PosRegisterView() {
                       </div>
                     </div>
                     <div className="flex items-center gap-1">
-                      <Button
-                        type="button"
-                        size="icon"
-                        variant="outline"
-                        className="h-7 w-7"
-                        onClick={() => setQty(line.key, line.quantity - 1)}
-                      >
-                        <Minus className="h-3.5 w-3.5" />
-                      </Button>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="outline"
+                            className="h-7 w-7"
+                            onClick={() => setQty(line.key, line.quantity - 1)}
+                          >
+                            <Minus className="h-3.5 w-3.5" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Decrease quantity</TooltipContent>
+                      </Tooltip>
                       <span className="w-7 text-center text-sm font-semibold">
                         {line.quantity}
                       </span>
-                      <Button
-                        type="button"
-                        size="icon"
-                        variant="outline"
-                        className="h-7 w-7"
-                        onClick={() => setQty(line.key, line.quantity + 1)}
-                      >
-                        <Plus className="h-3.5 w-3.5" />
-                      </Button>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="outline"
+                            className="h-7 w-7"
+                            onClick={() => setQty(line.key, line.quantity + 1)}
+                          >
+                            <Plus className="h-3.5 w-3.5" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Increase quantity</TooltipContent>
+                      </Tooltip>
                     </div>
                     <div className="w-16 text-right text-sm font-semibold">
                       {formatPeso(line.unitPrice * line.quantity)}
                     </div>
-                    <Button
-                      type="button"
-                      size="icon"
-                      variant="ghost"
-                      className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                      onClick={() => setQty(line.key, 0)}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                          onClick={() => setQty(line.key, 0)}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Remove item</TooltipContent>
+                    </Tooltip>
                   </div>
                 ))
               )}
@@ -474,12 +541,12 @@ export function PosRegisterView() {
 
             <div className="space-y-1.5">
               <Label>Discount (₱)</Label>
-              <Input
-                type="number"
+              <NumberInput
                 min={0}
                 step="0.01"
+                placeholder="0"
                 value={discount}
-                onChange={(e) => setDiscount(Number(e.target.value) || 0)}
+                onValueChange={setDiscount}
               />
             </div>
             <div className="space-y-1.5">
@@ -502,37 +569,66 @@ export function PosRegisterView() {
             </div>
 
             <div className="grid grid-cols-2 gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                disabled={!cart.length || saveOrder.isPending}
-                onClick={() => persist("held")}
-              >
-                <Pause className="mr-1.5 h-4 w-4" />
-                Hold
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={!cart.length}
-                onClick={clearTicket}
-              >
-                Clear
-              </Button>
-              <Button
-                type="button"
-                className="col-span-2 bg-teal-600 hover:bg-teal-700"
-                disabled={!cart.length || saveOrder.isPending}
-                onClick={() => {
-                  if (orderType === "room_charge") {
-                    setPayMethod("room_charge");
-                  }
-                  setChargeOpen(true);
-                }}
-              >
-                <CreditCard className="mr-1.5 h-4 w-4" />
-                Charge {formatPeso(total)}
-              </Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex w-full">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="w-full"
+                      disabled={!cart.length || saveOrder.isPending}
+                      onClick={() => persist("held")}
+                    >
+                      <Pause className="mr-1.5 h-4 w-4" />
+                      Hold
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Save this ticket as held so you can resume it later from Orders
+                </TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex w-full">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="w-full"
+                      disabled={!cart.length}
+                      onClick={clearTicket}
+                    >
+                      Clear
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Discard the current ticket without saving
+                </TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="col-span-2 inline-flex w-full">
+                    <Button
+                      type="button"
+                      className="w-full bg-teal-600 hover:bg-teal-700"
+                      disabled={!cart.length || saveOrder.isPending}
+                      onClick={() => {
+                        if (orderType === "room_charge") {
+                          setPayMethod("room_charge");
+                        }
+                        setChargeOpen(true);
+                      }}
+                    >
+                      <CreditCard className="mr-1.5 h-4 w-4" />
+                      Charge {formatPeso(total)}
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Take payment and complete this order
+                </TooltipContent>
+              </Tooltip>
             </div>
           </CardContent>
         </Card>
@@ -592,19 +688,35 @@ export function PosRegisterView() {
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setChargeOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              className="bg-teal-600 hover:bg-teal-700"
-              disabled={
-                saveOrder.isPending ||
-                (payMethod === "cash" && cashTendered !== "" && tendered < total)
-              }
-              onClick={() => persist("paid", true)}
-            >
-              {saveOrder.isPending ? "Processing…" : "Confirm payment"}
-            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="outline" onClick={() => setChargeOpen(false)}>
+                  Cancel
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Close without charging</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex">
+                  <Button
+                    className="bg-teal-600 hover:bg-teal-700"
+                    disabled={
+                      saveOrder.isPending ||
+                      (payMethod === "cash" &&
+                        cashTendered !== "" &&
+                        tendered < total)
+                    }
+                    onClick={() => persist("paid", true)}
+                  >
+                    {saveOrder.isPending ? "Processing…" : "Confirm payment"}
+                  </Button>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>
+                Finalize payment and mark the order as paid
+              </TooltipContent>
+            </Tooltip>
           </DialogFooter>
         </DialogContent>
       </Dialog>

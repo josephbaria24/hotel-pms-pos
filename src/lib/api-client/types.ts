@@ -7,7 +7,29 @@ export type User = {
   role: "admin" | "staff" | string;
   isActive: boolean;
   password?: string;
+  email?: string | null;
+  onboardingCompleted?: boolean;
 };
+
+export type ClassroomUser = {
+  id: string;
+  email: string | null;
+  fullName: string;
+  username: string;
+  role: string;
+  isActive: boolean;
+  onboardingCompleted: boolean;
+  createdAt: string;
+  roomsCount: number;
+  guestsCount: number;
+  reservationsCount: number;
+  checkinsCount: number;
+  paymentsCount: number;
+  posOrdersCount: number;
+  posPaidCount: number;
+};
+
+export type OperationMode = "lab" | "shared";
 
 export type Guest = {
   id: string;

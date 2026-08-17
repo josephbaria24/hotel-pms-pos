@@ -20,9 +20,11 @@ import {
   newId,
 } from "./mappers";
 import type {
+  ClassroomUser,
   CreateReservationPayload,
   CreateRoomPayload,
   Guest,
+  OperationMode,
   Payment,
   Reservation,
   Room,
@@ -46,6 +48,8 @@ const qk = {
   activity: ["activity"] as const,
   revenue: ["revenue"] as const,
   reservationReport: ["reservation-report"] as const,
+  classroom: ["admin", "classroom"] as const,
+  operationMode: ["admin", "operation-mode"] as const,
 };
 
 export const getListGuestsQueryKey = () => qk.guests;
@@ -160,6 +164,9 @@ export function useListGuests() {
         mapGuest(g as Record<string, unknown>, counts.get(String(g.id)) ?? 0),
       );
     },
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+    refetchOnMount: false,
   });
 }
 
@@ -203,10 +210,41 @@ export function useDeleteGuest() {
 }
 
 export async function prefetchGuestHubBookingsData(qc: QueryClient) {
-  await qc.prefetchQuery({ queryKey: qk.reservations, queryFn: fetchReservationViews });
+  await qc.prefetchQuery({
+    queryKey: qk.reservations,
+    queryFn: fetchReservationViews,
+    staleTime: 5 * 60_000,
+  });
 }
 export async function prefetchGuestHubStaysData(qc: QueryClient) {
-  await qc.prefetchQuery({ queryKey: qk.reservations, queryFn: fetchReservationViews });
+  await qc.prefetchQuery({
+    queryKey: qk.reservations,
+    queryFn: fetchReservationViews,
+    staleTime: 5 * 60_000,
+  });
+}
+
+export async function prefetchGuestHubDirectoryData(qc: QueryClient) {
+  await qc.prefetchQuery({
+    queryKey: qk.guests,
+    staleTime: 5 * 60_000,
+    queryFn: async (): Promise<Guest[]> => {
+      const supabase = createClient();
+      const [{ data: guests, error }, { data: reservations }] = await Promise.all([
+        supabase.from("guests").select("*").order("created_at", { ascending: false }),
+        supabase.from("reservations").select("guest_id, status"),
+      ]);
+      if (error) throw error;
+      const counts = new Map<string, number>();
+      for (const r of reservations ?? []) {
+        if (r.status === "cancelled") continue;
+        counts.set(r.guest_id, (counts.get(r.guest_id) ?? 0) + 1);
+      }
+      return (guests ?? []).map((g) =>
+        mapGuest(g as Record<string, unknown>, counts.get(String(g.id)) ?? 0),
+      );
+    },
+  });
 }
 
 /* ─── Rooms ─── */
@@ -216,12 +254,32 @@ export function useListRooms() {
     queryKey: qk.rooms,
     queryFn: async (): Promise<Room[]> => {
       const supabase = createClient();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      const userId = user?.id;
       const { data, error } = await supabase
         .from("rooms")
         .select("*")
         .order("room_number");
       if (error) throw error;
-      return (data ?? []).map((r) => mapRoom(r as Record<string, unknown>));
+      // Lab mode: own + admin rooms can share room numbers — keep one (prefer own).
+      const rows = [...(data ?? [])].sort((a, b) => {
+        const aOwn = String((a as { tenant_id?: string }).tenant_id ?? "") === userId ? 0 : 1;
+        const bOwn = String((b as { tenant_id?: string }).tenant_id ?? "") === userId ? 0 : 1;
+        return aOwn - bOwn;
+      });
+      const seen = new Set<string>();
+      const out: Room[] = [];
+      for (const row of rows) {
+        const num = String((row as { room_number?: string }).room_number ?? "")
+          .trim()
+          .toLowerCase();
+        if (!num || seen.has(num)) continue;
+        seen.add(num);
+        out.push(mapRoom(row as Record<string, unknown>));
+      }
+      return out;
     },
   });
 }
@@ -304,7 +362,18 @@ export function useListRoomOptions(kind: "type" | "status") {
         kind === "type" ? "room_type_options" : "room_status_options";
       const { data, error } = await supabase.from(table).select("*").order("value");
       if (error) throw error;
-      return (data ?? []).map((r) => mapRoomOption(r as Record<string, unknown>));
+      // Lab mode can return the same value from own + admin tenants; Radix
+      // SelectItem values must be unique or the trigger shows "AvailableAvailable".
+      const seen = new Set<string>();
+      const options: ReturnType<typeof mapRoomOption>[] = [];
+      for (const row of data ?? []) {
+        const mapped = mapRoomOption(row as Record<string, unknown>);
+        const key = mapped.value.trim().toLowerCase();
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        options.push(mapped);
+      }
+      return options;
     },
   });
 }
@@ -452,6 +521,10 @@ export function useListReservations() {
   return useQuery({
     queryKey: qk.reservations,
     queryFn: fetchReservationViews,
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+    refetchOnMount: false,
+    placeholderData: (previous) => previous,
   });
 }
 
@@ -475,6 +548,24 @@ export function useCreateReservation() {
       }
       const id = newId();
       const reservationNumber = `RSV-${Date.now()}`;
+
+      const { data: existingStays, error: clashErr } = await supabase
+        .from("reservations")
+        .select("id, reservation_number, check_in_date, check_out_date")
+        .eq("room_id", payload.roomId)
+        .in("status", ["reserved", "checked_in"]);
+      if (clashErr) throw clashErr;
+      const clash = (existingStays ?? []).find(
+        (row) =>
+          payload.checkInDate < String(row.check_out_date) &&
+          String(row.check_in_date) < payload.checkOutDate,
+      );
+      if (clash) {
+        throw new Error(
+          `This room is already reserved for overlapping dates (${clash.reservation_number}). Pick another room or change the stay dates.`,
+        );
+      }
+
       const { error } = await supabase.from("reservations").insert({
         id,
         reservation_number: reservationNumber,
@@ -586,7 +677,22 @@ export function useDeleteReservation() {
       const { error } = await supabase.from("reservations").delete().eq("id", id);
       if (error) throw error;
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.reservations }),
+    onMutate: async (id) => {
+      await qc.cancelQueries({ queryKey: qk.reservations });
+      const previous = qc.getQueryData<Reservation[]>(qk.reservations);
+      qc.setQueryData<Reservation[]>(qk.reservations, (old) =>
+        (old ?? []).filter((row) => row.id !== id),
+      );
+      return { previous };
+    },
+    onError: (_err, _id, ctx) => {
+      if (ctx?.previous) qc.setQueryData(qk.reservations, ctx.previous);
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: qk.reservations });
+      qc.invalidateQueries({ queryKey: qk.rooms });
+      qc.invalidateQueries({ queryKey: qk.activity });
+    },
   });
 }
 
@@ -708,7 +814,7 @@ export function useGetReservationContractData() {
     mutationFn: async (input: { id: string }) => {
       const supabase = createClient();
       const [{ data: settings }, { data: res, error }] = await Promise.all([
-        supabase.from("settings").select("*").eq("id", "main").maybeSingle(),
+        supabase.from("settings").select("*").limit(1).maybeSingle(),
         supabase
           .from("reservations")
           .select(
@@ -756,7 +862,7 @@ export function useGetReservationBillData() {
       const contract = await (async () => {
         const supabase = createClient();
         const [{ data: settings }, { data: res, error }] = await Promise.all([
-          supabase.from("settings").select("*").eq("id", "main").maybeSingle(),
+          supabase.from("settings").select("*").limit(1).maybeSingle(),
           supabase
             .from("reservations")
             .select(`*, guests (*), rooms ( room_number, type )`)
@@ -1054,7 +1160,7 @@ export function useGetSettings() {
       const { data, error } = await supabase
         .from("settings")
         .select("*")
-        .eq("id", "main")
+        .limit(1)
         .maybeSingle();
       if (error) throw error;
       if (!data) {
@@ -1091,7 +1197,14 @@ export function useUpdateSettings() {
       }>,
     ) => {
       const supabase = createClient();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) throw new Error("Not signed in");
+
       const patch: Record<string, unknown> = {
+        id: user.id,
+        tenant_id: user.id,
         updated_at: new Date().toISOString(),
       };
       if (input.hotelName !== undefined) patch.hotel_name = input.hotelName;
@@ -1104,9 +1217,7 @@ export function useUpdateSettings() {
         patch.check_out_time = input.checkOutTime;
       if (input.currency !== undefined) patch.currency = input.currency;
       if (input.taxRate !== undefined) patch.tax_rate = input.taxRate;
-      const { error } = await supabase
-        .from("settings")
-        .upsert({ id: "main", ...patch });
+      const { error } = await supabase.from("settings").upsert(patch);
       if (error) throw error;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.settings }),
@@ -1125,7 +1236,21 @@ export function useListUsers() {
         .select("*")
         .order("created_at", { ascending: false });
       if (error) throw error;
-      return (data ?? []).map((r) => mapUser(r as Record<string, unknown>));
+
+      const emailById = new Map<string, string | null>();
+      const { data: classroom } = await supabase.rpc("admin_classroom_overview");
+      if (Array.isArray(classroom)) {
+        for (const row of classroom as Record<string, unknown>[]) {
+          emailById.set(String(row.id), (row.email as string | null) ?? null);
+        }
+      }
+
+      return (data ?? []).map((r) =>
+        mapUser({
+          ...(r as Record<string, unknown>),
+          email: emailById.get(String((r as { id: string }).id)) ?? null,
+        }),
+      );
     },
   });
 }
@@ -1187,6 +1312,177 @@ export function useDeleteUser() {
       throw new Error("Delete users from Supabase Auth dashboard.");
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.users }),
+  });
+}
+
+export function useCompleteOnboarding() {
+  return useMutation({
+    mutationFn: async (userId: string) => {
+      const supabase = createClient();
+      const { error } = await supabase
+        .from("profiles")
+        .update({
+          onboarding_completed: true,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", userId);
+      if (error) throw error;
+    },
+  });
+}
+
+export function useAdminClassroom() {
+  return useQuery({
+    queryKey: qk.classroom,
+    queryFn: async (): Promise<ClassroomUser[]> => {
+      const supabase = createClient();
+      const { data, error } = await supabase.rpc("admin_classroom_overview");
+      if (error) throw error;
+      return ((data ?? []) as Record<string, unknown>[]).map((row) => ({
+        id: String(row.id),
+        email: (row.email as string | null) ?? null,
+        fullName: String(row.full_name ?? ""),
+        username: String(row.username ?? ""),
+        role: String(row.role ?? "staff"),
+        isActive: Boolean(row.is_active ?? true),
+        onboardingCompleted: Boolean(row.onboarding_completed),
+        createdAt: String(row.created_at ?? ""),
+        roomsCount: Number(row.rooms_count ?? 0),
+        guestsCount: Number(row.guests_count ?? 0),
+        reservationsCount: Number(row.reservations_count ?? 0),
+        checkinsCount: Number(row.checkins_count ?? 0),
+        paymentsCount: Number(row.payments_count ?? 0),
+        posOrdersCount: Number(row.pos_orders_count ?? 0),
+        posPaidCount: Number(row.pos_paid_count ?? 0),
+      }));
+    },
+  });
+}
+
+export function useAdminUpdateStudent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      id: string;
+      role?: string;
+      isActive?: boolean;
+      onboardingCompleted?: boolean;
+    }) => {
+      const supabase = createClient();
+      const patch: Record<string, unknown> = {
+        updated_at: new Date().toISOString(),
+      };
+      if (input.role !== undefined) patch.role = input.role;
+      if (input.isActive !== undefined) patch.is_active = input.isActive;
+      if (input.onboardingCompleted !== undefined) {
+        patch.onboarding_completed = input.onboardingCompleted;
+      }
+      const { error } = await supabase
+        .from("profiles")
+        .update(patch)
+        .eq("id", input.id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.classroom });
+      qc.invalidateQueries({ queryKey: qk.users });
+    },
+  });
+}
+
+export function useAdminBulkUpdateStudents() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      ids: string[];
+      isActive?: boolean;
+      onboardingCompleted?: boolean;
+    }) => {
+      if (input.ids.length === 0) return;
+      const supabase = createClient();
+      const patch: Record<string, unknown> = {
+        updated_at: new Date().toISOString(),
+      };
+      if (input.isActive !== undefined) patch.is_active = input.isActive;
+      if (input.onboardingCompleted !== undefined) {
+        patch.onboarding_completed = input.onboardingCompleted;
+      }
+      const { error } = await supabase
+        .from("profiles")
+        .update(patch)
+        .in("id", input.ids);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.classroom });
+      qc.invalidateQueries({ queryKey: qk.users });
+    },
+  });
+}
+
+export function useAdminDeleteStudents() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (ids: string[]) => {
+      const res = await fetch("/api/admin/students", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+      const json = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        deleted?: number;
+        failures?: { id: string; message: string }[];
+      };
+      if (!res.ok) {
+        throw new Error(json.error || "Delete failed");
+      }
+      return json;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.classroom });
+      qc.invalidateQueries({ queryKey: qk.users });
+    },
+  });
+}
+
+export function useOperationMode() {
+  return useQuery({
+    queryKey: qk.operationMode,
+    queryFn: async (): Promise<OperationMode> => {
+      const supabase = createClient();
+      const { data, error } = await supabase
+        .from("app_config")
+        .select("operation_mode")
+        .eq("id", 1)
+        .maybeSingle();
+      if (error) throw error;
+      return data?.operation_mode === "shared" ? "shared" : "lab";
+    },
+  });
+}
+
+export function useSetOperationMode() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (mode: OperationMode) => {
+      const supabase = createClient();
+      const { data, error } = await supabase.rpc("set_app_operation_mode", {
+        p_mode: mode,
+      });
+      if (error) throw error;
+      return (data as OperationMode) ?? mode;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.operationMode });
+      qc.invalidateQueries({ queryKey: qk.rooms });
+      qc.invalidateQueries({ queryKey: qk.guests });
+      qc.invalidateQueries({ queryKey: qk.reservations });
+      qc.invalidateQueries({ queryKey: qk.payments });
+      qc.invalidateQueries({ queryKey: qk.dashboardSummary });
+      qc.invalidateQueries({ queryKey: qk.activity });
+      qc.invalidateQueries({ queryKey: ["pos"] });
+    },
   });
 }
 

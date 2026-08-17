@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { NumberInput, numberOrZero } from "@/components/ui/number-input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -42,11 +43,16 @@ export default function Settings() {
     contactNumber: "",
     email: "",
   });
-  const [policyForm, setPolicyForm] = useState({
+  const [policyForm, setPolicyForm] = useState<{
+    checkInTime: string;
+    checkOutTime: string;
+    currency: string;
+    taxRate: number | "";
+  }>({
     checkInTime: "14:00",
     checkOutTime: "12:00",
     currency: "Peso",
-    taxRate: 0,
+    taxRate: "",
   });
   const [activeSection, setActiveSection] = useState<"basic" | "policies" | "appearance" | "connections">(
     "basic",
@@ -149,7 +155,14 @@ export default function Settings() {
     if (!networkConfig || !window.__ELECTRON__?.setNetworkConfig) return;
     setIsSavingNetwork(true);
     try {
-      const saved = await window.__ELECTRON__.setNetworkConfig(networkConfig);
+      const payload = {
+        ...networkConfig,
+        apiPort:
+          networkConfig.apiPort === "" || networkConfig.apiPort == null
+            ? 3001
+            : Number(networkConfig.apiPort),
+      };
+      const saved = await window.__ELECTRON__.setNetworkConfig(payload);
       setNetworkConfig(saved);
       toast({
         title: "Network config saved",
@@ -272,7 +285,10 @@ export default function Settings() {
 
   async function savePolicySettings() {
     try {
-      await updateSettingsMutation.mutateAsync(policyForm);
+      await updateSettingsMutation.mutateAsync({
+        ...policyForm,
+        taxRate: numberOrZero(policyForm.taxRate),
+      });
       await queryClient.invalidateQueries({ queryKey: ["settings"] });
       toast({ title: "Policies saved" });
     } catch (error) {
@@ -553,14 +569,13 @@ export default function Settings() {
                         </div>
                         <div className="space-y-1.5">
                           <Label>Tax Rate (%)</Label>
-                          <Input
-                            type="number"
+                          <NumberInput
+                            min={0}
+                            step="0.01"
+                            placeholder="0"
                             value={policyForm.taxRate}
-                            onChange={(e) =>
-                              setPolicyForm((prev) => ({
-                                ...prev,
-                                taxRate: Number(e.target.value || "0"),
-                              }))
+                            onValueChange={(taxRate) =>
+                              setPolicyForm((prev) => ({ ...prev, taxRate }))
                             }
                           />
                         </div>
@@ -802,13 +817,16 @@ export default function Settings() {
                           <Label>Port</Label>
                           <Input
                             type="number"
-                            value={networkConfig.apiPort}
-                            onChange={(e) =>
+                            min={1}
+                            placeholder="3001"
+                            value={networkConfig.apiPort === "" || networkConfig.apiPort == null ? "" : networkConfig.apiPort}
+                            onChange={(e) => {
+                              const raw = e.target.value;
                               setNetworkConfig({
                                 ...networkConfig,
-                                apiPort: Number(e.target.value || "3001"),
-                              })
-                            }
+                                apiPort: raw === "" ? "" : Number(raw),
+                              });
+                            }}
                           />
                         </div>
 

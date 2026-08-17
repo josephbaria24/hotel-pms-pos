@@ -1,8 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Pencil, Plus, Tags, Trash2 } from "lucide-react";
+import { EyeOff, Pencil, Plus, Tags, Trash2 } from "lucide-react";
 import { PosPageShell } from "@/components/pos/PosPageShell";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -15,6 +16,12 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { NumberInput, numberOrZero } from "@/components/ui/number-input";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -30,26 +37,29 @@ import {
   useCreatePosCategory,
   useDeletePosCategory,
   usePosCategories,
+  usePosProducts,
   useUpdatePosCategory,
 } from "@/lib/api-client/pos";
 import type { PosCategory } from "@/lib/api-client/pos-types";
+import { cn } from "@/lib/utils";
 
 type FormState = {
   name: string;
   description: string;
-  sortOrder: number;
+  sortOrder: number | "";
   isActive: boolean;
 };
 
 const emptyForm: FormState = {
   name: "",
   description: "",
-  sortOrder: 0,
+  sortOrder: "",
   isActive: true,
 };
 
 export function PosCategoriesView() {
   const { data: categories = [], isLoading } = usePosCategories();
+  const { data: products = [] } = usePosProducts();
   const createCat = useCreatePosCategory();
   const updateCat = useUpdatePosCategory();
   const deleteCat = useDeletePosCategory();
@@ -64,6 +74,16 @@ export function PosCategoriesView() {
     () => [...categories].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name)),
     [categories],
   );
+  const activeCats = useMemo(() => sorted.filter((c) => c.isActive), [sorted]);
+  const hiddenCats = useMemo(() => sorted.filter((c) => !c.isActive), [sorted]);
+  const productCountByCategory = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const product of products) {
+      if (!product.categoryId) continue;
+      counts.set(product.categoryId, (counts.get(product.categoryId) ?? 0) + 1);
+    }
+    return counts;
+  }, [products]);
 
   const openCreate = () => {
     setEditing(null);
@@ -93,7 +113,7 @@ export function PosCategoriesView() {
           id: editing.id,
           name: form.name,
           description: form.description || null,
-          sortOrder: form.sortOrder,
+          sortOrder: numberOrZero(form.sortOrder),
           isActive: form.isActive,
         });
         toast({ title: "Category updated" });
@@ -101,7 +121,7 @@ export function PosCategoriesView() {
         await createCat.mutateAsync({
           name: form.name,
           description: form.description || null,
-          sortOrder: form.sortOrder,
+          sortOrder: numberOrZero(form.sortOrder),
           isActive: form.isActive,
         });
         toast({ title: "Category created" });
@@ -131,17 +151,68 @@ export function PosCategoriesView() {
     }
   };
 
+  const toggleActive = async (cat: PosCategory) => {
+    try {
+      await updateCat.mutateAsync({ id: cat.id, isActive: !cat.isActive });
+      toast({
+        title: cat.isActive ? "Hidden from register" : "Shown on register",
+        description: cat.name,
+      });
+    } catch (err) {
+      toast({
+        title: "Could not update category",
+        description: err instanceof Error ? err.message : "Unknown error",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const renderCards = (items: PosCategory[]) => (
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      {items.map((cat) => (
+        <CategoryCard
+          key={cat.id}
+          cat={cat}
+          productCount={productCountByCategory.get(cat.id) ?? 0}
+          onEdit={() => openEdit(cat)}
+          onDelete={() => setDeleting(cat)}
+          onToggle={() => void toggleActive(cat)}
+          toggling={updateCat.isPending}
+        />
+      ))}
+    </div>
+  );
+
   return (
     <PosPageShell
       title="Categories"
       description="Group products for faster register browsing."
       icon={Tags}
     >
-      <div className="mb-4 flex justify-end">
-        <Button className="bg-teal-600 hover:bg-teal-700" onClick={openCreate}>
-          <Plus className="mr-1.5 h-4 w-4" />
-          Add category
-        </Button>
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge
+            variant="outline"
+            className="h-6 rounded-full border-teal-500/30 bg-teal-500/10 px-2.5 text-[11px] font-semibold text-teal-700 dark:text-teal-300"
+          >
+            {activeCats.length} active
+          </Badge>
+          <Badge
+            variant="outline"
+            className="h-6 rounded-full border-border bg-muted px-2.5 text-[11px] font-semibold text-muted-foreground"
+          >
+            {hiddenCats.length} hidden
+          </Badge>
+        </div>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button className="bg-teal-600 hover:bg-teal-700" onClick={openCreate}>
+              <Plus className="mr-1.5 h-4 w-4" />
+              Add category
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Create a new product group for the register</TooltipContent>
+        </Tooltip>
       </div>
 
       {isLoading ? (
@@ -153,35 +224,34 @@ export function PosCategoriesView() {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {sorted.map((cat) => (
-            <Card key={cat.id} className="border-border/70">
-              <CardContent className="flex items-start justify-between gap-3 p-4">
-                <div>
-                  <div className="font-medium">{cat.name}</div>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    {cat.description || "No description"}
-                  </p>
-                  <p className="mt-2 text-[11px] uppercase tracking-wide text-muted-foreground">
-                    Sort {cat.sortOrder} · {cat.isActive ? "Active" : "Inactive"}
-                  </p>
-                </div>
-                <div className="flex gap-1">
-                  <Button size="icon" variant="ghost" onClick={() => openEdit(cat)}>
-                    <Pencil className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    className="text-destructive"
-                    onClick={() => setDeleting(cat)}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+        <div className="space-y-6">
+          <section className="space-y-3">
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-semibold tracking-tight">On the register</h2>
+              <span className="text-xs text-muted-foreground">Visible to cashiers</span>
+            </div>
+            {activeCats.length === 0 ? (
+              <Card className="border-dashed">
+                <CardContent className="py-8 text-center text-sm text-muted-foreground">
+                  No active categories. Turn one on so it appears at the register.
+                </CardContent>
+              </Card>
+            ) : (
+              renderCards(activeCats)
+            )}
+          </section>
+
+          {hiddenCats.length > 0 && (
+            <section className="space-y-3">
+              <div className="flex items-center gap-2">
+                <EyeOff className="h-3.5 w-3.5 text-muted-foreground" />
+                <h2 className="text-sm font-semibold tracking-tight text-muted-foreground">
+                  Hidden from register
+                </h2>
+              </div>
+              {renderCards(hiddenCats)}
+            </section>
+          )}
         </div>
       )}
 
@@ -193,49 +263,94 @@ export function PosCategoriesView() {
           <div className="space-y-3 py-2">
             <div className="space-y-1.5">
               <Label>Name</Label>
-              <Input
-                value={form.name}
-                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-              />
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Input
+                    value={form.name}
+                    onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                    placeholder="e.g. Beverages"
+                  />
+                </TooltipTrigger>
+                <TooltipContent>Display name on register category chips</TooltipContent>
+              </Tooltip>
             </div>
             <div className="space-y-1.5">
               <Label>Description</Label>
-              <Input
-                value={form.description}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, description: e.target.value }))
-                }
-              />
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Input
+                    value={form.description}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, description: e.target.value }))
+                    }
+                    placeholder="Optional"
+                  />
+                </TooltipTrigger>
+                <TooltipContent>
+                  Optional staff note. Not shown on the register chips.
+                </TooltipContent>
+              </Tooltip>
             </div>
             <div className="space-y-1.5">
               <Label>Sort order</Label>
-              <Input
-                type="number"
-                value={form.sortOrder}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, sortOrder: Number(e.target.value) || 0 }))
-                }
-              />
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <NumberInput
+                    placeholder="0"
+                    value={form.sortOrder}
+                    onValueChange={(sortOrder) =>
+                      setForm((f) => ({ ...f, sortOrder }))
+                    }
+                  />
+                </TooltipTrigger>
+                <TooltipContent>
+                  Lower numbers appear first. Leave blank to use 0.
+                </TooltipContent>
+              </Tooltip>
             </div>
             <div className="flex items-center justify-between rounded-lg border px-3 py-2">
               <Label>Active</Label>
-              <Switch
-                checked={form.isActive}
-                onCheckedChange={(v) => setForm((f) => ({ ...f, isActive: v }))}
-              />
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex">
+                    <Switch
+                      checked={form.isActive}
+                      onCheckedChange={(v) =>
+                        setForm((f) => ({ ...f, isActive: v }))
+                      }
+                      className="data-[state=checked]:bg-teal-600 data-[state=unchecked]:bg-muted-foreground/40"
+                    />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Inactive categories stay hidden on the register
+                </TooltipContent>
+              </Tooltip>
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              className="bg-teal-600 hover:bg-teal-700"
-              onClick={save}
-              disabled={createCat.isPending || updateCat.isPending}
-            >
-              Save
-            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="outline" onClick={() => setOpen(false)}>
+                  Cancel
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Close without saving</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex">
+                  <Button
+                    className="bg-teal-600 hover:bg-teal-700"
+                    onClick={save}
+                    disabled={createCat.isPending || updateCat.isPending}
+                  >
+                    Save
+                  </Button>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>Save this category</TooltipContent>
+            </Tooltip>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -255,5 +370,126 @@ export function PosCategoriesView() {
         </AlertDialogContent>
       </AlertDialog>
     </PosPageShell>
+  );
+}
+
+function CategoryCard({
+  cat,
+  productCount,
+  onEdit,
+  onDelete,
+  onToggle,
+  toggling,
+}: {
+  cat: PosCategory;
+  productCount: number;
+  onEdit: () => void;
+  onDelete: () => void;
+  onToggle: () => void;
+  toggling: boolean;
+}) {
+  const active = cat.isActive;
+  return (
+    <Card
+      className={cn(
+        "relative overflow-hidden border shadow-sm transition-colors",
+        active
+          ? "border-teal-500/25 bg-card"
+          : "border-dashed border-border/80 bg-muted/40",
+      )}
+    >
+      <div
+        className={cn(
+          "absolute inset-y-0 left-0 w-1",
+          active ? "bg-teal-500" : "bg-muted-foreground/30",
+        )}
+      />
+      <CardContent className="flex items-start gap-3 p-4 pl-5">
+        <div
+          className={cn(
+            "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl",
+            active
+              ? "bg-teal-500/12 text-teal-700 dark:text-teal-300"
+              : "bg-muted text-muted-foreground",
+          )}
+        >
+          {active ? <Tags className="h-5 w-5" /> : <EyeOff className="h-5 w-5" />}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <div className={cn("truncate font-semibold", !active && "text-muted-foreground")}>
+                {cat.name}
+              </div>
+              <p className="mt-0.5 line-clamp-2 text-sm text-muted-foreground">
+                {cat.description || "No description"}
+              </p>
+            </div>
+            <div className="flex shrink-0 gap-0.5">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button size="icon" variant="ghost" className="h-8 w-8" onClick={onEdit}>
+                    <Pencil className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Edit category</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-8 w-8 text-destructive"
+                    onClick={onDelete}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Delete category</TooltipContent>
+              </Tooltip>
+            </div>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Badge
+              variant="outline"
+              className={cn(
+                "h-5 rounded-full px-2 text-[10px] font-bold uppercase tracking-wide",
+                active
+                  ? "border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-300"
+                  : "border-border bg-background/70 text-muted-foreground",
+              )}
+            >
+              {active ? "Active" : "Hidden"}
+            </Badge>
+            <span className="text-[11px] text-muted-foreground">
+              Sort {cat.sortOrder}
+            </span>
+            <span className="text-[11px] text-muted-foreground">
+              {productCount} {productCount === 1 ? "product" : "products"}
+            </span>
+            <span className="ml-auto inline-flex items-center gap-2">
+              <span className="text-[11px] text-muted-foreground">
+                {active ? "Shown" : "Hidden"}
+              </span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex">
+                    <Switch
+                      checked={active}
+                      disabled={toggling}
+                      onCheckedChange={onToggle}
+                      className="data-[state=checked]:bg-teal-600 data-[state=unchecked]:bg-muted-foreground/40"
+                    />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {active ? "Hide this category from the register" : "Show this category on the register"}
+                </TooltipContent>
+              </Tooltip>
+            </span>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
   );
 }

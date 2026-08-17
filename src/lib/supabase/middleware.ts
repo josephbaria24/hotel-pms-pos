@@ -37,11 +37,9 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  if (user && isAuthPage) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/dashboard";
-    return NextResponse.redirect(url);
-  }
+  // Do not auto-redirect /login → /dashboard here.
+  // Login must check is_active first; inactive users would otherwise
+  // bounce away before the "not activated" message can show.
 
   return supabaseResponse;
 }

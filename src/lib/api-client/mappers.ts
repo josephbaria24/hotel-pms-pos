@@ -142,7 +142,9 @@ export function mapUser(row: Record<string, unknown>): User {
     fullName: String(row.full_name ?? ""),
     role: String(row.role ?? "staff"),
     isActive: Boolean(row.is_active ?? true),
-    password: "",
+    password: String(row.login_password ?? ""),
+    email: (row.email as string | null | undefined) ?? null,
+    onboardingCompleted: Boolean(row.onboarding_completed),
   };
 }
 

@@ -111,8 +111,18 @@ const SelectLabel = React.forwardRef<
 ))
 SelectLabel.displayName = SelectPrimitive.Label.displayName
 
-/** Use inside `SelectItem` for the label shown in the trigger and for typeahead. */
+/** Use inside `SelectItem` for the label shown in the trigger (needed when item has extra UI). */
 const SelectItemText = SelectPrimitive.ItemText
+
+function isSimpleSelectLabel(children: React.ReactNode) {
+  return React.Children.toArray(children).every(
+    (child) =>
+      child == null ||
+      typeof child === "string" ||
+      typeof child === "number" ||
+      typeof child === "boolean",
+  )
+}
 
 const SelectItem = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Item>,
@@ -131,7 +141,11 @@ const SelectItem = React.forwardRef<
         <Check className="h-4 w-4" />
       </SelectPrimitive.ItemIndicator>
     </span>
-    {children}
+    {isSimpleSelectLabel(children) ? (
+      <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+    ) : (
+      children
+    )}
   </SelectPrimitive.Item>
 ))
 SelectItem.displayName = SelectPrimitive.Item.displayName

@@ -10,8 +10,13 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
+import type { User as AuthUser } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@/lib/api-client";
+import {
+  ACCOUNT_INACTIVE_MESSAGE,
+  stashLoginError,
+} from "@/lib/auth-messages";
 
 interface AuthContextType {
   user: User | null;
@@ -29,19 +34,16 @@ const AuthContext = createContext<AuthContextType>({
   refresh: async () => {},
 });
 
-async function loadProfile(): Promise<User | null> {
-  const supabase = createClient();
-  const {
-    data: { user: authUser },
-  } = await supabase.auth.getUser();
-  if (!authUser) return null;
-
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("*")
-    .eq("id", authUser.id)
-    .maybeSingle();
-
+function mapAuthUser(
+  authUser: AuthUser,
+  profile: {
+    username?: string | null;
+    full_name?: string | null;
+    role?: string | null;
+    is_active?: boolean | null;
+    onboarding_completed?: boolean | null;
+  } | null,
+): User {
   return {
     id: authUser.id,
     username:
@@ -55,7 +57,46 @@ async function loadProfile(): Promise<User | null> {
       "User",
     role: (profile?.role as string) ?? "staff",
     isActive: profile?.is_active ?? true,
+    email: authUser.email ?? null,
+    onboardingCompleted: Boolean(profile?.onboarding_completed),
   };
+}
+
+/** Load profile for a known auth user. Does not call auth.getUser/getSession. */
+async function loadProfileForUser(authUser: AuthUser): Promise<User | null> {
+  const supabase = createClient();
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("*")
+    .eq("id", authUser.id)
+    .maybeSingle();
+
+  if (profile && profile.is_active === false) {
+    stashLoginError(ACCOUNT_INACTIVE_MESSAGE);
+    // Defer signOut so we never call it under an auth-state lock.
+    setTimeout(() => {
+      void createClient().auth.signOut();
+    }, 0);
+    return null;
+  }
+
+  return mapAuthUser(authUser, profile);
+}
+
+async function loadProfile(): Promise<User | null> {
+  const supabase = createClient();
+  const {
+    data: { user: authUser },
+  } = await supabase.auth.getUser();
+  if (!authUser) return null;
+  return loadProfileForUser(authUser);
+}
+
+function redirectToLoginIfNeeded(router: ReturnType<typeof useRouter>) {
+  const path = window.location.pathname;
+  if (path !== "/login" && !path.startsWith("/login")) {
+    router.replace("/login");
+  }
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -66,14 +107,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const refresh = useCallback(async () => {
     const profile = await loadProfile();
     setUserState(profile);
-  }, []);
+    if (!profile) redirectToLoginIfNeeded(router);
+  }, [router]);
 
   useEffect(() => {
     let mounted = true;
+
     (async () => {
       try {
         const profile = await loadProfile();
-        if (mounted) setUserState(profile);
+        if (!mounted) return;
+        setUserState(profile);
+        if (!profile) redirectToLoginIfNeeded(router);
       } finally {
         if (mounted) setIsLoading(false);
       }
@@ -82,27 +127,43 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const supabase = createClient();
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(async () => {
-      const profile = await loadProfile();
-      if (mounted) setUserState(profile);
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      // CRITICAL: never await supabase.auth.* directly inside this callback.
+      // Doing so deadlocks signOut()/signIn() and causes infinite loading.
+      setTimeout(() => {
+        void (async () => {
+          if (!mounted) return;
+
+          if (event === "SIGNED_OUT" || !session?.user) {
+            setUserState(null);
+            return;
+          }
+
+          const profile = await loadProfileForUser(session.user);
+          if (!mounted) return;
+          setUserState(profile);
+          if (!profile) redirectToLoginIfNeeded(router);
+        })();
+      }, 0);
     });
 
     return () => {
       mounted = false;
       subscription.unsubscribe();
     };
-  }, []);
+  }, [router]);
 
   const setUser = useCallback((next: User | null) => {
     setUserState(next);
   }, []);
 
-  const logout = useCallback(async () => {
-    const supabase = createClient();
-    await supabase.auth.signOut();
+  const logout = useCallback(() => {
     setUserState(null);
-    router.push("/login");
-    router.refresh();
+    router.replace("/login");
+    const supabase = createClient();
+    void supabase.auth.signOut().catch(() => {
+      // Session may already be cleared; ignore.
+    });
   }, [router]);
 
   const value = useMemo(

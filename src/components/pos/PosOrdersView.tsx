@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { ClipboardList, RotateCcw } from "lucide-react";
 import { PosPageShell } from "@/components/pos/PosPageShell";
 import { PosOrderStatusBadge } from "@/components/pos/PosBadges";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -36,9 +37,24 @@ const filters = [
 export function PosOrdersView() {
   const [filter, setFilter] = useState<(typeof filters)[number]["id"]>("active");
   const { data: orders = [], isLoading } = usePosOrders(filter);
+  const { data: allOrders = [] } = usePosOrders("all");
   const voidOrder = useVoidPosOrder();
   const { toast } = useToast();
   const [voiding, setVoiding] = useState<PosOrder | null>(null);
+
+  const filterCounts = useMemo(() => {
+    let paid = 0;
+    let voided = 0;
+    for (const order of allOrders) {
+      if (order.status === "paid") paid += 1;
+      else if (order.status === "void") voided += 1;
+    }
+    return {
+      paid,
+      void: voided,
+      all: allOrders.length,
+    } as const;
+  }, [allOrders]);
 
   const sorted = useMemo(
     () =>
@@ -71,21 +87,41 @@ export function PosOrdersView() {
       icon={ClipboardList}
     >
       <div className="mb-4 flex flex-wrap gap-2">
-        {filters.map((f) => (
-          <button
-            key={f.id}
-            type="button"
-            onClick={() => setFilter(f.id)}
-            className={cn(
-              "rounded-full border px-3 py-1.5 text-xs font-medium transition-colors",
-              filter === f.id
-                ? "border-teal-600 bg-teal-600 text-white"
-                : "border-border bg-card text-muted-foreground hover:text-foreground",
-            )}
-          >
-            {f.label}
-          </button>
-        ))}
+        {filters.map((f) => {
+          const selected = filter === f.id;
+          const count =
+            f.id === "paid" || f.id === "void" || f.id === "all"
+              ? filterCounts[f.id]
+              : null;
+          return (
+            <button
+              key={f.id}
+              type="button"
+              onClick={() => setFilter(f.id)}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors",
+                selected
+                  ? "border-teal-600 bg-teal-600 text-white"
+                  : "border-border bg-card text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {f.label}
+              {count != null ? (
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    "h-5 min-w-5 justify-center rounded-full px-1.5 text-[10px] font-bold tabular-nums",
+                    selected
+                      ? "border-white/30 bg-white/20 text-white"
+                      : "border-border bg-muted text-muted-foreground",
+                  )}
+                >
+                  {count}
+                </Badge>
+              ) : null}
+            </button>
+          );
+        })}
       </div>
 
       {isLoading ? (

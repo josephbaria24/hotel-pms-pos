@@ -1,12 +1,18 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Eye, EyeOff } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import {
+  ACCOUNT_INACTIVE_MESSAGE,
+  consumeLoginError,
+  stashLoginError,
+} from "@/lib/auth-messages";
+import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -32,6 +38,7 @@ const loginSchema = z.object({
 
 export default function LoginPage() {
   const router = useRouter();
+  const { toast } = useToast();
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -44,29 +51,93 @@ export default function LoginPage() {
     },
   });
 
+  useEffect(() => {
+    const stashed = consumeLoginError();
+    if (!stashed) return;
+    setError(stashed);
+    toast({
+      title: "Sign in blocked",
+      description: stashed,
+      variant: "destructive",
+    });
+  }, [toast]);
+
+  function showInactiveError() {
+    stashLoginError(ACCOUNT_INACTIVE_MESSAGE);
+    setError(ACCOUNT_INACTIVE_MESSAGE);
+    toast({
+      title: "Sign in blocked",
+      description: ACCOUNT_INACTIVE_MESSAGE,
+      variant: "destructive",
+    });
+  }
+
   async function onSubmit(values: z.infer<typeof loginSchema>) {
     setLoading(true);
     setError(null);
     const supabase = createClient();
-    const { error: signInError } = await supabase.auth.signInWithPassword({
-      email: values.email,
-      password: values.password,
-    });
-    setLoading(false);
+    const { data: signInData, error: signInError } =
+      await supabase.auth.signInWithPassword({
+        email: values.email,
+        password: values.password,
+      });
 
     if (signInError) {
+      setLoading(false);
       setError(signInError.message);
+      toast({
+        title: "Sign in failed",
+        description: signInError.message,
+        variant: "destructive",
+      });
       return;
     }
 
+    const userId = signInData.user?.id;
+    if (!userId) {
+      setLoading(false);
+      setError("Sign in failed. Please try again.");
+      return;
+    }
+
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("is_active")
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (profileError) {
+      await supabase.auth.signOut();
+      setLoading(false);
+      setError(profileError.message);
+      toast({
+        title: "Sign in failed",
+        description: profileError.message,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!profile || profile.is_active === false) {
+      await supabase.auth.signOut();
+      setLoading(false);
+      showInactiveError();
+      return;
+    }
+
+    setLoading(false);
     router.push("/dashboard");
     router.refresh();
   }
 
   return (
-    <div className="relative flex min-h-[100dvh] items-center justify-center overflow-hidden bg-secondary p-4 sm:p-6">
-      <div className="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&q=80&w=2070')] bg-cover bg-center opacity-10 mix-blend-luminosity" />
-      <Card className="z-10 w-full max-w-md border-none bg-card shadow-2xl">
+    <div className="relative flex min-h-[100dvh] items-center justify-center overflow-hidden bg-slate-900 p-4 sm:p-6">
+      <div
+        className="absolute inset-0 scale-105 bg-cover bg-center bg-no-repeat blur-[3px]"
+        style={{ backgroundImage: "url('/loginbg.png')" }}
+      />
+      <div className="absolute inset-0 bg-black/25" />
+      <Card className="z-10 w-full max-w-md border-none bg-card/95 shadow-2xl backdrop-blur-sm">
         <CardHeader className="space-y-3 px-6 pb-6 pt-8 text-center sm:px-10 sm:pb-8 sm:pt-10">
           <div className="mb-2 flex justify-center">
             <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-xl bg-white p-2 shadow-lg">
@@ -141,7 +212,12 @@ export default function LoginPage() {
                 )}
               />
               {error ? (
-                <p className="text-sm text-destructive">{error}</p>
+                <div
+                  role="alert"
+                  className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2.5 text-sm text-destructive"
+                >
+                  {error}
+                </div>
               ) : null}
               <Button
                 type="submit"

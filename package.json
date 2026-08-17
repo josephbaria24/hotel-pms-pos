@@ -12,6 +12,7 @@
     "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy -- --keep-vars",
     "upload": "opennextjs-cloudflare build && opennextjs-cloudflare upload -- --keep-vars",
     "cf-typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts",
+    "seed:students": "node --env-file=.env.local scripts/seed-students.mjs",
     "dev:vite": "vite --config vite.config.ts --host 0.0.0.0",
     "seed:fakes": "npm --prefix \"../PalawanSU Hotel/palsu-hotel-server\" run seed:fakes",
     "dev:all": "concurrently \"npm --prefix \\\"../PalawanSU Hotel/palsu-hotel-server\\\" run dev\" \"npm run electron:dev\"",

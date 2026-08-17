@@ -33,6 +33,7 @@ interface User {
   role: string;
   isActive?: boolean;
   password?: string;
+  email?: string | null;
 }
 
 export default function Users() {
@@ -170,7 +171,9 @@ export default function Users() {
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Staff Users</h1>
-          <p className="text-muted-foreground">Manage access credentials and administrative permissions.</p>
+          <p className="text-muted-foreground">
+            Edit staff profile details. Classroom progress lives under Admin.
+          </p>
         </div>
         <Button type="button" onClick={handleOpenAdd} className="shadow-sm">
           <Plus className="w-4 h-4 mr-2" />
@@ -178,33 +181,12 @@ export default function Users() {
         </Button>
       </div>
 
-      {/* Admin Credentials Info Card */}
-      <div className="bg-primary/5 border border-primary/20 rounded-xl p-4 flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center text-primary shrink-0">
-            <Key className="w-5 h-5" />
-          </div>
-          <div>
-            <h4 className="text-sm font-semibold text-foreground">Default Administrator Access</h4>
-            <p className="text-xs text-muted-foreground">
-              For fresh installations or system recovery, use the default administrator credentials.
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 bg-card border rounded-lg px-3 py-1.5 text-xs font-mono">
-          <span className="text-muted-foreground">User:</span>
-          <span className="font-semibold text-foreground">admin</span>
-          <span className="text-muted-foreground/30 px-1">|</span>
-          <span className="text-muted-foreground">Pass:</span>
-          <span className="font-semibold text-foreground">admin123</span>
-        </div>
-      </div>
-
       <ScrollableTablePane offsetRem={16} minVh={28}>
         <Table>
           <TableHeader className="sticky top-0 z-[1] bg-card shadow-sm">
             <TableRow>
               <TableHead>Name</TableHead>
+              <TableHead>Email</TableHead>
               <TableHead>Username</TableHead>
               <TableHead>Password</TableHead>
               <TableHead>Role</TableHead>
@@ -218,6 +200,9 @@ export default function Users() {
                 <TableRow key={i}>
                   <TableCell>
                     <Skeleton className="h-4 w-[150px]" />
+                  </TableCell>
+                  <TableCell>
+                    <Skeleton className="h-4 w-[180px]" />
                   </TableCell>
                   <TableCell>
                     <Skeleton className="h-4 w-[100px]" />
@@ -238,7 +223,7 @@ export default function Users() {
               ))
             ) : !users?.length ? (
               <TableRow>
-                <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
                   No staff users in the database yet.
                 </TableCell>
               </TableRow>
@@ -254,12 +239,17 @@ export default function Users() {
                       </div>
                       {user.fullName}
                     </TableCell>
+                    <TableCell className="text-muted-foreground text-sm">
+                      {user.email || "—"}
+                    </TableCell>
                     <TableCell className="text-muted-foreground font-mono">{user.username}</TableCell>
                     <TableCell className="font-mono">
                       <div className="flex items-center gap-1.5">
                         <Key className="h-3.5 w-3.5 text-muted-foreground/60" />
                         <span className="bg-muted/60 px-1.5 py-0.5 rounded text-[11px] font-semibold tracking-wider">
-                          {isPasswordVisible ? user.password || "••••••••" : "••••••••"}
+                          {isPasswordVisible
+                            ? user.password || "Not stored — re-run seed"
+                            : "••••••••"}
                         </span>
                         <button
                           type="button"

@@ -6,11 +6,18 @@
 2. In Supabase Dashboard → **SQL Editor**, run in order:
    - `supabase/migrations/001_hotel_schema.sql`
    - `supabase/migrations/002_pos_schema.sql` (POS catalog, tables, orders, payments)
+   - `supabase/migrations/003_student_tenancy.sql` (per-student isolated data)
 3. In Supabase → **Authentication → Users → Add user**:
    - Email: e.g. `admin@palawansu.hotel`
    - Password: choose a strong password
    - Optional user metadata: `{ "full_name": "Administrator", "role": "admin", "username": "admin" }`
-4. Run the app:
+4. Seed classroom student accounts (requires `SUPABASE_SERVICE_ROLE_KEY` in `.env.local`):
+
+```bash
+npm run seed:students
+```
+
+5. Run the app:
 
 ```bash
 npm run dev

@@ -12,6 +12,7 @@ import {
   Moon,
   Package,
   Receipt,
+  Shield,
   ShoppingCart,
   Sun,
   Tags,
@@ -115,23 +116,24 @@ type NavItem = {
   name: string;
   href: string;
   icon: React.ComponentType<{ className?: string }>;
+  tourId?: string;
 };
 
 const pmsNavigation: NavItem[] = [
-  { name: "Dashboard", href: "/dashboard", icon: DashboardIcon },
-  { name: "Guests & stays", href: "/guests", icon: GuestsIcon },
-  { name: "Rooms", href: "/rooms", icon: RoomsIcon },
-  { name: "Billing", href: "/billing", icon: BillingIcon },
-  { name: "Reports", href: "/reports", icon: ReportsIcon },
+  { name: "Dashboard", href: "/dashboard", icon: DashboardIcon, tourId: "nav-dashboard" },
+  { name: "Guests & stays", href: "/guests", icon: GuestsIcon, tourId: "nav-guests" },
+  { name: "Rooms", href: "/rooms", icon: RoomsIcon, tourId: "nav-rooms" },
+  { name: "Billing", href: "/billing", icon: BillingIcon, tourId: "nav-billing" },
+  { name: "Reports", href: "/reports", icon: ReportsIcon, tourId: "nav-reports" },
 ];
 
 const posNavigation: NavItem[] = [
-  { name: "Register", href: "/pos", icon: ShoppingCart },
-  { name: "Orders", href: "/pos/orders", icon: ClipboardList },
-  { name: "Products", href: "/pos/products", icon: Package },
-  { name: "Categories", href: "/pos/categories", icon: Tags },
-  { name: "Sales", href: "/pos/sales", icon: Receipt },
-  { name: "Floor plan", href: "/pos/tables", icon: LayoutGrid },
+  { name: "Register", href: "/pos", icon: ShoppingCart, tourId: "nav-pos-register" },
+  { name: "Orders", href: "/pos/orders", icon: ClipboardList, tourId: "nav-pos-orders" },
+  { name: "Products", href: "/pos/products", icon: Package, tourId: "nav-pos-products" },
+  { name: "Categories", href: "/pos/categories", icon: Tags, tourId: "nav-pos-categories" },
+  { name: "Sales", href: "/pos/sales", icon: Receipt, tourId: "nav-pos-sales" },
+  { name: "Floor plan", href: "/pos/tables", icon: LayoutGrid, tourId: "nav-pos-tables" },
 ];
 
 type SidebarPanelProps = {
@@ -172,6 +174,7 @@ function SidebarPanel({
   const modeSwitchButton = (
     <Link
       href={switchHref}
+      data-tour="nav-pos"
       onClick={(e) => {
         onModeSwitch(e);
         onNavigate?.();
@@ -228,7 +231,12 @@ function SidebarPanel({
               ? locPath === "/pos"
               : locPath === item.href || pathname.startsWith(`${item.href}/`);
           return (
-            <Link key={item.href} href={item.href} onClick={() => onNavigate?.()}>
+            <Link
+              key={item.href}
+              href={item.href}
+              data-tour={item.tourId}
+              onClick={() => onNavigate?.()}
+            >
               <div
                 className={cn(
                   "group flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2.5 text-[13px] font-medium transition-all duration-200",
@@ -347,8 +355,24 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
         ...pmsNavigation,
         ...(user?.role === "admin"
           ? [
-              { name: "Users", href: "/users", icon: UsersIcon },
-              { name: "Settings", href: "/settings", icon: SettingsIcon },
+              {
+                name: "Admin",
+                href: "/admin",
+                icon: Shield,
+                tourId: "nav-admin",
+              },
+              {
+                name: "Users",
+                href: "/users",
+                icon: UsersIcon,
+                tourId: "nav-users",
+              },
+              {
+                name: "Settings",
+                href: "/settings",
+                icon: SettingsIcon,
+                tourId: "nav-settings",
+              },
             ]
           : []),
       ];
@@ -485,6 +509,7 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
         </div>
         <Link
           href={switchHref}
+          data-tour="nav-pos"
           onClick={handleModeSwitch}
           aria-label={switchLabel}
           className="inline-flex h-10 min-w-10 flex-col items-center justify-center gap-0.5 rounded-xl border border-border/80 bg-background px-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground shadow-sm hover:text-foreground"

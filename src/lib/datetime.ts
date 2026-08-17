@@ -49,3 +49,13 @@ export function formatPhTime(value: DateInput): string {
     hour12: true,
   }).format(date);
 }
+
+/** Hotel stays are [check-in, check-out): checkout day is free for the next guest. */
+export function staysOverlap(
+  aIn: string,
+  aOut: string,
+  bIn: string,
+  bOut: string,
+): boolean {
+  return Boolean(aIn && aOut && bIn && bOut && aIn < bOut && bIn < aOut);
+}

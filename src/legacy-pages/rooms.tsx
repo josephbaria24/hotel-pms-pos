@@ -26,6 +26,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
+import { NumberInput } from "@/components/ui/number-input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -271,11 +272,17 @@ export default function Rooms() {
     id: string;
     value: string;
   } | null>(null);
-  const [newRoom, setNewRoom] = useState<CreateRoomPayload>({
+  const [newRoom, setNewRoom] = useState<{
+    roomNumber: string;
+    type: string;
+    capacity: number | "";
+    pricePerNight: number | "";
+    status: string;
+  }>({
     roomNumber: "",
     type: "deluxe",
-    capacity: 2,
-    pricePerNight: 0,
+    capacity: "",
+    pricePerNight: "",
     status: "available",
   });
 
@@ -560,10 +567,22 @@ export default function Rooms() {
 
   const handleCreateRoom = async () => {
     try {
-      await createRoomMutation.mutateAsync(newRoom);
+      await createRoomMutation.mutateAsync({
+        roomNumber: newRoom.roomNumber,
+        type: newRoom.type,
+        capacity: Number(newRoom.capacity) || 1,
+        pricePerNight: Number(newRoom.pricePerNight) || 0,
+        status: newRoom.status,
+      });
       queryClient.invalidateQueries({ queryKey: getListRoomsQueryKey() });
       setIsCreateOpen(false);
-      setNewRoom({ roomNumber: "", type: "deluxe", capacity: 2, pricePerNight: 0, status: "available" });
+      setNewRoom({
+        roomNumber: "",
+        type: "deluxe",
+        capacity: "",
+        pricePerNight: "",
+        status: "available",
+      });
       toast({ title: "Room created successfully" });
     } catch (error) {
       toast({
@@ -778,21 +797,25 @@ export default function Rooms() {
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Capacity</label>
-                  <Input
-                    type="number"
+                  <NumberInput
                     min={1}
+                    placeholder="2"
                     value={newRoom.capacity}
-                    onChange={(e) => setNewRoom((prev) => ({ ...prev, capacity: Number(e.target.value) || 1 }))}
+                    onValueChange={(capacity) =>
+                      setNewRoom((prev) => ({ ...prev, capacity }))
+                    }
                   />
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Price / Night</label>
-                  <Input
-                    type="number"
+                  <NumberInput
                     min={0}
                     step="0.01"
+                    placeholder="0"
                     value={newRoom.pricePerNight}
-                    onChange={(e) => setNewRoom((prev) => ({ ...prev, pricePerNight: Number(e.target.value) || 0 }))}
+                    onValueChange={(pricePerNight) =>
+                      setNewRoom((prev) => ({ ...prev, pricePerNight }))
+                    }
                   />
                 </div>
                 <div className="space-y-2 md:col-span-2">
@@ -1918,7 +1941,13 @@ function RoomDetails({
   const [newStatusInMenu, setNewStatusInMenu] = useState("");
   const [newSubmenuStatusDisables, setNewSubmenuStatusDisables] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
-  const [editForm, setEditForm] = useState({
+  const [editForm, setEditForm] = useState<{
+    roomNumber: string;
+    type: string;
+    capacity: number | "";
+    pricePerNight: number | "";
+    status: string;
+  }>({
     roomNumber: room.roomNumber,
     type: room.type,
     capacity: room.capacity,
@@ -1977,8 +2006,8 @@ function RoomDetails({
         id: room.id,
         roomNumber: editForm.roomNumber.trim(),
         type: editForm.type,
-        capacity: editForm.capacity,
-        pricePerNight: editForm.pricePerNight,
+        capacity: Number(editForm.capacity) || 1,
+        pricePerNight: Number(editForm.pricePerNight) || 0,
       };
       if (room.status !== "occupied") {
         await updateRoomMutation.mutateAsync({ ...base, status: editForm.status });
@@ -2382,21 +2411,25 @@ function RoomDetails({
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
                 <label className="text-sm font-medium">Capacity</label>
-                <Input
-                  type="number"
+                <NumberInput
                   min={1}
+                  placeholder="2"
                   value={editForm.capacity}
-                  onChange={(e) => setEditForm((prev) => ({ ...prev, capacity: Number(e.target.value) || 1 }))}
+                  onValueChange={(capacity) =>
+                    setEditForm((prev) => ({ ...prev, capacity }))
+                  }
                 />
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-medium">Price / night</label>
-                <Input
-                  type="number"
+                <NumberInput
                   min={0}
                   step="0.01"
+                  placeholder="0"
                   value={editForm.pricePerNight}
-                  onChange={(e) => setEditForm((prev) => ({ ...prev, pricePerNight: Number(e.target.value) || 0 }))}
+                  onValueChange={(pricePerNight) =>
+                    setEditForm((prev) => ({ ...prev, pricePerNight }))
+                  }
                 />
               </div>
             </div>

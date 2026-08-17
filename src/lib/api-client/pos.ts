@@ -23,9 +23,9 @@ import type {
 export type * from "./pos-types";
 
 const qk = {
-  categories: ["pos", "categories"] as const,
-  products: ["pos", "products"] as const,
-  tables: ["pos", "tables"] as const,
+  categories: ["pos", "categories", "deduped"] as const,
+  products: ["pos", "products", "deduped"] as const,
+  tables: ["pos", "tables", "deduped"] as const,
   orders: (filter?: string) => ["pos", "orders", filter ?? "all"] as const,
   order: (id: string) => ["pos", "order", id] as const,
   sales: (day: string) => ["pos", "sales", day] as const,
@@ -75,6 +75,40 @@ function mapTable(row: Record<string, unknown>): PosTable {
     sortOrder: Number(row.sort_order ?? 0),
     notes: (row.notes as string | null) ?? null,
   };
+}
+
+/**
+ * Lab mode RLS returns own + admin catalog rows. Prefer the signed-in user's
+ * row when names/SKUs collide so the register does not show duplicates.
+ */
+function dedupePreferOwnTenant<T>(
+  rows: Record<string, unknown>[],
+  userId: string | undefined,
+  keyFn: (row: Record<string, unknown>) => string,
+  mapFn: (row: Record<string, unknown>) => T,
+): T[] {
+  const sorted = [...rows].sort((a, b) => {
+    const aOwn = String(a.tenant_id ?? "") === userId ? 0 : 1;
+    const bOwn = String(b.tenant_id ?? "") === userId ? 0 : 1;
+    return aOwn - bOwn;
+  });
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const row of sorted) {
+    const key = keyFn(row);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(mapFn(row));
+  }
+  return out;
+}
+
+async function currentUserId(): Promise<string | undefined> {
+  const supabase = createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  return user?.id;
 }
 
 function mapItem(row: Record<string, unknown>): PosOrderItem {
@@ -225,13 +259,19 @@ export function usePosCategories() {
     queryKey: qk.categories,
     queryFn: async () => {
       const supabase = createClient();
+      const userId = await currentUserId();
       const { data, error } = await supabase
         .from("pos_categories")
         .select("*")
         .order("sort_order")
         .order("name");
       if (error) throw error;
-      return (data ?? []).map((r) => mapCategory(r as Record<string, unknown>));
+      return dedupePreferOwnTenant(
+        (data ?? []) as Record<string, unknown>[],
+        userId,
+        (row) => String(row.name ?? "").trim().toLowerCase(),
+        mapCategory,
+      );
     },
   });
 }
@@ -305,13 +345,25 @@ export function usePosProducts() {
     queryKey: qk.products,
     queryFn: async () => {
       const supabase = createClient();
+      const userId = await currentUserId();
       const { data, error } = await supabase
         .from("pos_products")
         .select("*, pos_categories ( name )")
         .order("sort_order")
         .order("name");
       if (error) throw error;
-      return (data ?? []).map((r) => mapProduct(r as Record<string, unknown>));
+      return dedupePreferOwnTenant(
+        (data ?? []) as Record<string, unknown>[],
+        userId,
+        (row) => {
+          const sku = String(row.sku ?? "").trim().toLowerCase();
+          if (sku) return `sku:${sku}`;
+          const name = String(row.name ?? "").trim().toLowerCase();
+          const price = Number(row.price ?? 0);
+          return `name:${name}|${price}`;
+        },
+        mapProduct,
+      );
     },
   });
 }
@@ -393,6 +445,7 @@ export function usePosTables() {
     queryKey: qk.tables,
     queryFn: async () => {
       const supabase = createClient();
+      const userId = await currentUserId();
       const [{ data: tables, error }, { data: openOrders }] = await Promise.all([
         supabase
           .from("pos_tables")
@@ -412,8 +465,13 @@ export function usePosTables() {
           { id: String(o.id), number: String(o.order_number) },
         ]),
       );
-      return (tables ?? []).map((row) => {
-        const t = mapTable(row as Record<string, unknown>);
+      const deduped = dedupePreferOwnTenant(
+        (tables ?? []) as Record<string, unknown>[],
+        userId,
+        (row) => String(row.name ?? "").trim().toLowerCase(),
+        mapTable,
+      );
+      return deduped.map((t) => {
         const open = byTable.get(t.id);
         return {
           ...t,
@@ -674,45 +732,99 @@ export function useVoidPosOrder() {
 export function usePosSalesSummary(dayIso: string) {
   return useQuery({
     queryKey: qk.sales(dayIso),
+    enabled: Boolean(dayIso),
     queryFn: async () => {
       const supabase = createClient();
-      const start = `${dayIso}T00:00:00`;
-      const endDate = new Date(`${dayIso}T00:00:00`);
-      endDate.setDate(endDate.getDate() + 1);
-      const end = endDate.toISOString().slice(0, 10) + "T00:00:00";
+      const startLocal = new Date(`${dayIso}T00:00:00`);
+      const endLocal = new Date(startLocal);
+      endLocal.setDate(endLocal.getDate() + 1);
+      const start = startLocal.toISOString();
+      const end = endLocal.toISOString();
 
-      const { data, error } = await supabase
-        .from("pos_orders")
-        .select(ORDER_SELECT)
-        .gte("opened_at", start)
-        .lt("opened_at", end)
-        .order("opened_at", { ascending: false });
-      if (error) throw error;
+      const [openedRes, closedRes] = await Promise.all([
+        supabase
+          .from("pos_orders")
+          .select(ORDER_SELECT)
+          .gte("opened_at", start)
+          .lt("opened_at", end)
+          .order("opened_at", { ascending: false })
+          .limit(400),
+        supabase
+          .from("pos_orders")
+          .select(ORDER_SELECT)
+          .gte("closed_at", start)
+          .lt("closed_at", end)
+          .order("closed_at", { ascending: false })
+          .limit(400),
+      ]);
+      if (openedRes.error) throw openedRes.error;
+      if (closedRes.error) throw closedRes.error;
 
-      const orders = (data ?? []).map((r) =>
-        mapOrder(r as Record<string, unknown>),
+      const byId = new Map<string, PosOrder>();
+      for (const row of [...(openedRes.data ?? []), ...(closedRes.data ?? [])]) {
+        const order = mapOrder(row as Record<string, unknown>);
+        byId.set(order.id, order);
+      }
+      const orders = [...byId.values()].sort(
+        (a, b) =>
+          new Date(b.closedAt ?? b.openedAt).getTime() -
+          new Date(a.closedAt ?? a.openedAt).getTime(),
       );
-      const paid = orders.filter((o) => o.status === "paid");
-      const voided = orders.filter((o) => o.status === "void");
-      const byMethod: Record<string, number> = {};
+
+      const onThisDay = (iso: string | null | undefined) => {
+        if (!iso) return false;
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return false;
+        const stamp = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        return stamp === dayIso;
+      };
+
+      const paid = orders.filter(
+        (o) => o.status === "paid" && onThisDay(o.closedAt ?? o.openedAt),
+      );
+      const voided = orders.filter(
+        (o) => o.status === "void" && onThisDay(o.closedAt ?? o.openedAt),
+      );
+      const openCount = orders.filter((o) => o.status === "open").length;
+      const heldCount = orders.filter((o) => o.status === "held").length;
+
+      const byMethod: Record<string, { amount: number; count: number }> = {};
       let gross = 0;
+      let net = 0;
       let tax = 0;
       let discount = 0;
       for (const o of paid) {
         gross += o.totalAmount;
+        net += Math.max(0, o.subtotal - o.discountAmount);
         tax += o.taxAmount;
         discount += o.discountAmount;
-        for (const p of o.payments) {
-          byMethod[p.method] = (byMethod[p.method] ?? 0) + p.amount;
+        if (o.payments.length === 0) {
+          byMethod.unspecified = byMethod.unspecified ?? { amount: 0, count: 0 };
+          byMethod.unspecified.amount += o.totalAmount;
+          byMethod.unspecified.count += 1;
+        } else {
+          for (const p of o.payments) {
+            const key = p.method || "other";
+            byMethod[key] = byMethod[key] ?? { amount: 0, count: 0 };
+            byMethod[key].amount += p.amount;
+            byMethod[key].count += 1;
+          }
         }
       }
+      const voidAmount = voided.reduce((sum, o) => sum + o.totalAmount, 0);
+
       return {
         orders,
         paidCount: paid.length,
         voidCount: voided.length,
+        openCount,
+        heldCount,
         gross,
+        net,
         tax,
         discount,
+        avgTicket: paid.length ? gross / paid.length : 0,
+        voidAmount,
         byMethod,
       };
     },

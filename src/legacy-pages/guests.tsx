@@ -3,11 +3,13 @@ import { useSearch, useLocation } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useListGuests,
+  useListReservations,
   useUpdateGuest,
   useDeleteGuest,
   getListGuestsQueryKey,
   prefetchGuestHubBookingsData,
   prefetchGuestHubStaysData,
+  prefetchGuestHubDirectoryData,
   type Guest,
 } from "@workspace/api-client-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -15,6 +17,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
 import {
   Select,
   SelectContent,
@@ -47,7 +50,18 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Search, Plus, BookUser, MoreHorizontal, Eye, Pencil, Trash2 } from "lucide-react";
+import {
+  Search,
+  Plus,
+  BookUser,
+  MoreHorizontal,
+  Eye,
+  Pencil,
+  Trash2,
+  CalendarDays,
+  ArrowLeftRight,
+  Loader2,
+} from "lucide-react";
 import { ScrollableTablePane } from "@/components/layout/ScrollableTablePane";
 import { cn } from "@/lib/utils";
 import Reservations from "@/legacy-pages/reservations";
@@ -78,10 +92,49 @@ function guestNameParts(g: Guest): { firstName: string; lastName: string } {
   return { firstName: parts[0]!, lastName: parts.slice(1).join(" ") };
 }
 
-const TAB_META: Record<GuestTab, { label: string; hint: string }> = {
-  directory: { label: "Guest Directory", hint: "Names, contacts, stay counts" },
-  bookings: { label: "Bookings", hint: "Reservations & new booking" },
-  stays: { label: "Check-Ins & Outs", hint: "Check-in / check-out today" },
+function todayYmd() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+const TAB_META: Record<
+  GuestTab,
+  {
+    label: string;
+    shortLabel: string;
+    hint: string;
+    icon: typeof ArrowLeftRight;
+    activeClass: string;
+    badgeClass: string;
+  }
+> = {
+  stays: {
+    label: "Check-ins & outs",
+    shortLabel: "Stays",
+    hint: "Today’s arrivals and departures",
+    icon: ArrowLeftRight,
+    activeClass: "bg-emerald-600 text-white shadow-sm ring-1 ring-emerald-600/30",
+    badgeClass: "bg-white/20 text-white border-white/30",
+  },
+  bookings: {
+    label: "Bookings",
+    shortLabel: "Bookings",
+    hint: "Reservations & new booking",
+    icon: CalendarDays,
+    activeClass: "bg-sky-600 text-white shadow-sm ring-1 ring-sky-600/30",
+    badgeClass: "bg-white/20 text-white border-white/30",
+  },
+  directory: {
+    label: "Guest directory",
+    shortLabel: "Directory",
+    hint: "Names, contacts, stay counts",
+    icon: BookUser,
+    activeClass: "bg-foreground text-background shadow-sm",
+    badgeClass: "bg-background/20 text-background border-background/30",
+  },
 };
 
 export default function Guests() {
@@ -89,12 +142,76 @@ export default function Guests() {
   const [, setLocation] = useLocation();
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const { data: guests, isLoading } = useListGuests();
+  const { data: guests, isLoading, isFetching: guestsFetching } = useListGuests();
+  const {
+    data: reservations,
+    isLoading: reservationsLoading,
+    isFetching: reservationsFetching,
+  } = useListReservations();
   const updateGuestMutation = useUpdateGuest();
   const deleteGuestMutation = useDeleteGuest();
 
   const { tab: activeTab, params: urlParams } = useMemo(() => parseGuestHubSearch(search), [search]);
   const directoryQuery = urlParams.get("q") ?? "";
+
+  // Warm cache once so tab switches do not wait on first fetch.
+  useEffect(() => {
+    void prefetchGuestHubDirectoryData(queryClient);
+    void prefetchGuestHubBookingsData(queryClient);
+    void prefetchGuestHubStaysData(queryClient);
+  }, [queryClient]);
+
+  // Keep all hub panels mounted after first visit to this page (instant tab switches).
+  const [panelsReady, setPanelsReady] = useState(false);
+  useEffect(() => {
+    const id = window.setTimeout(() => setPanelsReady(true), 0);
+    return () => window.clearTimeout(id);
+  }, []);
+
+  const tabLoading = useMemo(
+    () =>
+      ({
+        directory: isLoading || (guestsFetching && !guests),
+        bookings: reservationsLoading || (reservationsFetching && !reservations),
+        stays: reservationsLoading || (reservationsFetching && !reservations),
+      }) as Record<GuestTab, boolean>,
+    [
+      isLoading,
+      guestsFetching,
+      guests,
+      reservationsLoading,
+      reservationsFetching,
+      reservations,
+    ],
+  );
+
+  const tabRefreshing = useMemo(
+    () =>
+      ({
+        directory: Boolean(guests && guestsFetching),
+        bookings: Boolean(reservations && reservationsFetching),
+        stays: Boolean(reservations && reservationsFetching),
+      }) as Record<GuestTab, boolean>,
+    [guests, guestsFetching, reservations, reservationsFetching],
+  );
+  const tabBadges = useMemo(() => {
+    const list = reservations ?? [];
+    const today = todayYmd();
+    const arrivalsToday = list.filter(
+      (r) => r.status === "reserved" && r.checkInDate.slice(0, 10) === today,
+    ).length;
+    const departuresToday = list.filter(
+      (r) => r.status === "checked_in" && r.checkOutDate.slice(0, 10) === today,
+    ).length;
+    const reservedBookings = list.filter((r) => r.status === "reserved").length;
+    const newDirectory = (guests ?? []).filter((g) => (g.totalStays ?? 0) === 0).length;
+
+    return {
+      stays: arrivalsToday + departuresToday,
+      bookings: reservedBookings,
+      directory: newDirectory,
+    } as Record<GuestTab, number>;
+  }, [reservations, guests]);
 
   const [directoryStaysFilter, setDirectoryStaysFilter] = useState<"all" | "has" | "none">("all");
   const [directorySort, setDirectorySort] = useState<"name" | "stays_desc" | "stays_asc">("name");
@@ -131,8 +248,18 @@ export default function Guests() {
     }
   }, [activeTab]);
 
+  // Also mount the other heavy panels in the background after paint.
+  useEffect(() => {
+    if (!panelsReady) return;
+    setHeavyPanelsMounted({ bookings: true, stays: true });
+  }, [panelsReady]);
+
   const setHubTab = useCallback(
     (next: GuestTab) => {
+      // Mount target panel before navigating so content is ready.
+      if (next === "bookings" || next === "stays") {
+        setHeavyPanelsMounted((m) => (m[next] ? m : { ...m, [next]: true }));
+      }
       startTransition(() => {
         const p = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
         p.set("tab", next);
@@ -162,6 +289,7 @@ export default function Guests() {
 
   const prefetchTab = useCallback(
     (id: GuestTab) => {
+      if (id === "directory") void prefetchGuestHubDirectoryData(queryClient);
       if (id === "bookings") void prefetchGuestHubBookingsData(queryClient);
       if (id === "stays") void prefetchGuestHubStaysData(queryClient);
     },
@@ -231,7 +359,7 @@ export default function Guests() {
   const deleteOk = deleteGuest && deleteConfirmText.trim() === deleteGuest.fullName.trim();
 
   return (
-    <div className="space-y-4 animate-in fade-in duration-300">
+    <div className="space-y-4">
       <div className="rounded-3xl bg-zinc-200/70 dark:bg-zinc-600/10 border-0 p-3 space-y-3">
         {/* Header Block */}
         <div className="px-2 pt-2 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -242,29 +370,121 @@ export default function Guests() {
             </p>
           </div>
 
-          {/* Pills Tab List */}
-          <div className="flex flex-wrap gap-1 p-1 bg-muted/40 rounded-full border max-w-md">
-            {GUEST_HUB_TAB_ORDER.map((id) => (
-              <button
-                key={id}
-                type="button"
-                role="tab"
-                aria-selected={activeTab === id}
-                onClick={() => setHubTab(id)}
-                onPointerEnter={() => prefetchTab(id)}
-                onFocus={() => prefetchTab(id)}
-                className={cn(
-                  "rounded-full px-3.5 py-1.5 text-xs font-semibold tracking-wide transition-all outline-none",
-                  activeTab === id
-                    ? "bg-foreground text-background shadow-sm animate-in fade-in duration-100"
-                    : "text-foreground hover:bg-muted/80",
-                )}
-              >
-                {TAB_META[id].label}
-              </button>
-            ))}
+          {/* Hub tabs */}
+          <div
+            role="tablist"
+            aria-label="Guests and stays sections"
+            className="grid w-full gap-2 sm:flex sm:w-auto sm:flex-wrap sm:justify-end"
+          >
+            {GUEST_HUB_TAB_ORDER.map((id) => {
+              const meta = TAB_META[id];
+              const Icon = meta.icon;
+              const selected = activeTab === id;
+              const count = tabBadges[id];
+              const showBadge = count > 0 && !tabLoading[id];
+              const loading = tabLoading[id];
+              const refreshing = selected && tabRefreshing[id];
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  role="tab"
+                  aria-selected={selected}
+                  aria-busy={loading || refreshing}
+                  title={meta.hint}
+                  onClick={() => setHubTab(id)}
+                  onPointerEnter={() => prefetchTab(id)}
+                  onFocus={() => prefetchTab(id)}
+                  className={cn(
+                    "group relative flex min-h-[3.25rem] items-center gap-2.5 rounded-2xl border px-3 py-2 text-left transition-all outline-none",
+                    "focus-visible:ring-2 focus-visible:ring-ring",
+                    selected
+                      ? meta.activeClass
+                      : "border-border/80 bg-card text-foreground hover:border-foreground/20 hover:bg-muted/60",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl",
+                      selected ? "bg-white/15" : "bg-muted text-muted-foreground group-hover:text-foreground",
+                    )}
+                  >
+                    {loading || refreshing ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Icon className="h-4 w-4" />
+                    )}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-2">
+                      <span className="text-sm font-semibold leading-tight">
+                        <span className="sm:hidden">{meta.shortLabel}</span>
+                        <span className="hidden sm:inline">{meta.label}</span>
+                      </span>
+                      {loading ? (
+                        <Badge
+                          variant="outline"
+                          className={cn(
+                            "h-5 rounded-full px-1.5 text-[10px] font-semibold",
+                            selected
+                              ? "border-white/30 bg-white/15 text-white"
+                              : "border-border bg-muted text-muted-foreground",
+                          )}
+                        >
+                          Loading
+                        </Badge>
+                      ) : showBadge ? (
+                        <Badge
+                          variant="outline"
+                          className={cn(
+                            "h-5 min-w-5 justify-center rounded-full px-1.5 text-[10px] font-bold tabular-nums",
+                            selected
+                              ? meta.badgeClass
+                              : id === "stays"
+                                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                                : id === "bookings"
+                                  ? "border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300"
+                                  : "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300",
+                          )}
+                        >
+                          {count > 99 ? "99+" : count}
+                        </Badge>
+                      ) : null}
+                    </span>
+                    <span
+                      className={cn(
+                        "mt-0.5 block text-[11px] leading-tight",
+                        selected ? "text-white/80" : "text-muted-foreground",
+                      )}
+                    >
+                      {loading ? "Fetching latest…" : meta.hint}
+                    </span>
+                  </span>
+                  {showBadge && !selected ? (
+                    <span
+                      className={cn(
+                        "absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full ring-2 ring-background",
+                        id === "stays"
+                          ? "bg-emerald-500"
+                          : id === "bookings"
+                            ? "bg-sky-500"
+                            : "bg-amber-500",
+                      )}
+                      aria-hidden
+                    />
+                  ) : null}
+                </button>
+              );
+            })}
           </div>
         </div>
+
+        {tabLoading[activeTab] ? (
+          <div className="flex items-center gap-2 rounded-2xl border border-border/60 bg-card/80 px-3 py-2 text-xs text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Loading {TAB_META[activeTab].label.toLowerCase()}…
+          </div>
+        ) : null}
 
         {/* Directory Panel: always mounted; hidden when another tab is active (cheap vs heavy tabs). */}
         <section
@@ -413,14 +633,16 @@ export default function Guests() {
             role="tabpanel"
             id="guests-panel-bookings"
             hidden={activeTab !== "bookings"}
-            className={cn(
-              "min-w-0 animate-in fade-in duration-200",
-              activeTab !== "bookings" && "hidden",
-            )}
+            className={cn("min-w-0", activeTab !== "bookings" && "hidden")}
             aria-hidden={activeTab !== "bookings"}
           >
             <Reservations embedded />
           </section>
+        ) : activeTab === "bookings" ? (
+          <div className="flex min-h-[40vh] items-center justify-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Preparing bookings…
+          </div>
         ) : null}
 
         {heavyPanelsMounted.stays ? (
@@ -428,14 +650,16 @@ export default function Guests() {
             role="tabpanel"
             id="guests-panel-stays"
             hidden={activeTab !== "stays"}
-            className={cn(
-              "min-w-0 animate-in fade-in duration-200",
-              activeTab !== "stays" && "hidden",
-            )}
+            className={cn("min-w-0", activeTab !== "stays" && "hidden")}
             aria-hidden={activeTab !== "stays"}
           >
             <CheckInOut embedded />
           </section>
+        ) : activeTab === "stays" ? (
+          <div className="flex min-h-[40vh] items-center justify-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Preparing check-ins…
+          </div>
         ) : null}
       </div>
 

@@ -41,6 +41,11 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { 
   Plus, XCircle, Loader2, CircleX, CalendarPlus, Ban,
   User, Users, Baby, Mail, Phone, MapPin, Wallet, 
@@ -49,7 +54,7 @@ import {
 } from "lucide-react";
 import { differenceInDays } from "date-fns";
 import { sileo } from "sileo";
-import { formatPhDate, formatPhDateTime, formatPhTime } from "@/lib/datetime";
+import { formatPhDate, formatPhDateTime, formatPhTime, staysOverlap } from "@/lib/datetime";
 import { ScrollableTablePane } from "@/components/layout/ScrollableTablePane";
 import {
   DropdownMenu,
@@ -778,21 +783,20 @@ export default function Reservations({ embedded }: ReservationsProps) {
 
   const confirmDeleteReservation = async () => {
     if (!deleteConfirmRes) return;
+    const booking = deleteConfirmRes;
+    setDeleteConfirmRes(null);
+    setDeleteConfirmText("");
     await sileo.promise(
-      deleteReservationMutation.mutateAsync(deleteConfirmRes.id).then(async (result) => {
-        await queryClient.invalidateQueries({ queryKey: getListReservationsQueryKey() });
-        setDeleteConfirmRes(null);
-        return result;
-      }),
+      deleteReservationMutation.mutateAsync(booking.id),
       {
         loading: {
           title: "Deleting reservation",
-          description: `Removing booking ${deleteConfirmRes.reservationNumber}...`,
+          description: `Removing booking ${booking.reservationNumber}...`,
           icon: <Loader2 className="h-4 w-4 animate-spin" />,
         },
         success: {
           title: "Reservation deleted",
-          description: `The booking ${deleteConfirmRes.reservationNumber} was successfully removed from the system.`,
+          description: `The booking ${booking.reservationNumber} was successfully removed from the system.`,
           icon: <Trash2 className="h-4 w-4" />,
         },
         error: (error) => ({
@@ -806,6 +810,8 @@ export default function Reservations({ embedded }: ReservationsProps) {
 
   const deleteOk = deleteConfirmRes && deleteConfirmText.trim() === deleteConfirmRes.reservationNumber.trim();
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [createTab, setCreateTab] = useState<"stay" | "guest">("stay");
+  const [guestHintOpen, setGuestHintOpen] = useState(false);
   const [useExistingGuest, setUseExistingGuest] = useState(true);
   const queryClient = useQueryClient();
   const search = useSearch();
@@ -826,6 +832,7 @@ export default function Reservations({ embedded }: ReservationsProps) {
   const [roomPickFilter, setRoomPickFilter] = useState("");
   const [guestPickFilter, setGuestPickFilter] = useState("");
   const cancelTimeouts = useRef<Record<string, any>>({});
+  const createBodyRef = useRef<HTMLDivElement>(null);
 
 
   useEffect(() => {
@@ -858,9 +865,9 @@ export default function Reservations({ embedded }: ReservationsProps) {
     checkInDate: today,
     checkOutDate: tomorrow,
     adults: "1",
-    children: "0",
+    children: "",
     totalAmount: "",
-    additionalFee: "0",
+    additionalFee: "",
     additionalFeeLabel: "",
     notes: "",
   });
@@ -869,6 +876,8 @@ export default function Reservations({ embedded }: ReservationsProps) {
     if (!isCreateOpen) {
       setRoomPickFilter("");
       setGuestPickFilter("");
+      setCreateTab("stay");
+      setGuestHintOpen(false);
     }
   }, [isCreateOpen]);
 
@@ -907,9 +916,9 @@ export default function Reservations({ embedded }: ReservationsProps) {
       checkInDate: today,
       checkOutDate: tomorrow,
       adults: "1",
-      children: "0",
+      children: "",
       totalAmount: "",
-      additionalFee: "0",
+      additionalFee: "",
       additionalFeeLabel: "",
       notes: "",
     });
@@ -917,15 +926,52 @@ export default function Reservations({ embedded }: ReservationsProps) {
 
   const availableRooms = rooms.filter((room) => room.status === "available");
 
+  const blockingReservations = useMemo(
+    () =>
+      (reservations ?? []).filter(
+        (r) => r.status === "reserved" || r.status === "checked_in",
+      ),
+    [reservations],
+  );
+
+  const conflictForRoom = (roomId: string) => {
+    if (!form.checkInDate || !form.checkOutDate) return null;
+    return (
+      blockingReservations.find(
+        (r) =>
+          r.roomId === roomId &&
+          staysOverlap(
+            form.checkInDate,
+            form.checkOutDate,
+            r.checkInDate,
+            r.checkOutDate,
+          ),
+      ) ?? null
+    );
+  };
+
   const availableRoomsFiltered = useMemo(() => {
     const q = roomPickFilter.trim().toLowerCase();
-    if (!q) return availableRooms;
-    return availableRooms.filter(
+    const list = rooms.filter((r) => r.status !== "maintenance");
+    if (!q) return list;
+    return list.filter(
       (r) =>
         r.roomNumber.toLowerCase().includes(q) ||
         (r.type || "").toLowerCase().includes(q),
     );
-  }, [availableRooms, roomPickFilter]);
+  }, [rooms, roomPickFilter]);
+
+  useEffect(() => {
+    if (!form.roomId || !form.checkInDate || !form.checkOutDate) return;
+    const clash = conflictForRoom(form.roomId);
+    if (!clash) return;
+    setForm((prev: any) => ({ ...prev, roomId: "" }));
+    sileo.error({
+      title: "Room already reserved",
+      description: `Room is booked ${formatPhDate(clash.checkInDate)} – ${formatPhDate(clash.checkOutDate)} for ${clash.guestName}. Choose another room or different dates.`,
+      icon: <DoorOpen className="w-4 h-4" />,
+    });
+  }, [form.roomId, form.checkInDate, form.checkOutDate, blockingReservations]);
 
   const guestsFiltered = useMemo(() => {
     const q = guestPickFilter.trim().toLowerCase();
@@ -950,20 +996,20 @@ export default function Reservations({ embedded }: ReservationsProps) {
     }
 
     if (useExistingGuest && !form.guestId) {
-      sileo.error({
-        title: "Guest Required",
-        description: "Please select an existing guest profile.",
-        icon: <Users className="h-4 w-4" />
+      setCreateTab("guest");
+      requestAnimationFrame(() => {
+        createBodyRef.current?.scrollTo({ top: 0, behavior: "smooth" });
       });
+      window.setTimeout(() => setGuestHintOpen(true), 280);
       return;
     }
 
     if (!useExistingGuest && (!form.firstName?.trim() || !form.lastName?.trim())) {
-      sileo.error({
-        title: "Names Required",
-        description: "Please enter the guest's first and last name.",
-        icon: <User className="w-4 h-4" />
+      setCreateTab("guest");
+      requestAnimationFrame(() => {
+        createBodyRef.current?.scrollTo({ top: 0, behavior: "smooth" });
       });
+      window.setTimeout(() => setGuestHintOpen(true), 280);
       return;
     }
 
@@ -983,6 +1029,16 @@ export default function Reservations({ embedded }: ReservationsProps) {
         title: "Invalid Stay Duration",
         description: "The check-out date must be at least one day after check-in.",
         icon: <CalendarDays className="h-4 w-4" />
+      });
+      return;
+    }
+
+    const clash = conflictForRoom(form.roomId);
+    if (clash) {
+      sileo.error({
+        title: "Room already reserved",
+        description: `This room is booked ${formatPhDate(clash.checkInDate)} – ${formatPhDate(clash.checkOutDate)} for ${clash.guestName}. It cannot be reserved again on overlapping dates.`,
+        icon: <DoorOpen className="w-4 h-4" />,
       });
       return;
     }
@@ -1228,8 +1284,8 @@ export default function Reservations({ embedded }: ReservationsProps) {
                 New Reservation
               </Button>
             </DialogTrigger>
-          <DialogContent className="max-w-3xl">
-            <DialogHeader>
+          <DialogContent className="flex max-h-[85vh] max-w-3xl flex-col gap-4 overflow-hidden p-6 sm:max-h-[85dvh]">
+            <DialogHeader className="shrink-0 pr-8">
               <DialogTitle className="text-2xl flex items-center gap-2">
                 <CalendarPlus className="w-6 h-6 text-primary" />
                 Create Reservation
@@ -1239,25 +1295,48 @@ export default function Reservations({ embedded }: ReservationsProps) {
               </DialogDescription>
             </DialogHeader>
 
-            <Tabs defaultValue="stay" className="w-full">
+            <div
+              ref={createBodyRef}
+              className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1"
+            >
+            <Tabs
+              value={createTab}
+              onValueChange={(value) => {
+                setCreateTab(value as "stay" | "guest");
+                if (value !== "guest") setGuestHintOpen(false);
+              }}
+              className="w-full"
+            >
               <TabsList className="grid w-full grid-cols-2 mb-4">
                 <TabsTrigger value="stay" className="flex items-center gap-2">
                   <DoorOpen className="w-4 h-4" />
                   Stay Details
                 </TabsTrigger>
-                <TabsTrigger value="guest" className="flex items-center gap-2">
+                <TabsTrigger
+                  value="guest"
+                  className={cn(
+                    "flex items-center gap-2",
+                    guestHintOpen && "ring-2 ring-primary ring-offset-2 ring-offset-background",
+                  )}
+                >
                   <User className="w-4 h-4" />
                   Guest Information
                 </TabsTrigger>
               </TabsList>
 
-              <TabsContent value="stay" className="space-y-4">
+              <TabsContent
+                value="stay"
+                className="space-y-4 duration-300 data-[state=active]:animate-in data-[state=active]:fade-in-0 data-[state=active]:slide-in-from-left-6"
+              >
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border rounded-lg p-4 bg-muted/30">
                   <div className="space-y-2 md:col-span-2">
                     <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground font-bold">
                       <DoorOpen className="w-3.5 h-3.5" />
                       Select Room
                     </Label>
+                    <p className="text-[11px] text-muted-foreground">
+                      Rooms already reserved or occupied on these dates stay listed but cannot be selected.
+                    </p>
                     <div className="rounded-lg border bg-card overflow-hidden">
                       {/* Sticky search */}
                       <div className="sticky top-0 z-[1] bg-card border-b px-2 py-2">
@@ -1276,24 +1355,51 @@ export default function Reservations({ embedded }: ReservationsProps) {
                         {availableRoomsFiltered.length === 0 ? (
                           <p className="text-xs text-muted-foreground text-center py-4">No rooms match the filter.</p>
                         ) : (
-                          availableRoomsFiltered.map((room) => (
+                          availableRoomsFiltered.map((room) => {
+                            const clash = conflictForRoom(room.id);
+                            const unavailable = Boolean(clash);
+                            const holdLabel =
+                              clash?.status === "checked_in" ? "Occupied" : "Reserved";
+                            return (
                             <button
                               key={room.id}
                               type="button"
-                              onClick={() => setForm((prev: any) => ({ ...prev, roomId: room.id }))}
-                              className={`w-full flex items-center justify-between gap-3 px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted/50 ${
-                                form.roomId === room.id
+                              disabled={unavailable}
+                              onClick={() => {
+                                if (unavailable) return;
+                                setForm((prev: any) => ({ ...prev, roomId: room.id }));
+                              }}
+                              className={cn(
+                                "w-full flex items-center justify-between gap-3 px-3 py-2.5 text-left text-sm transition-colors",
+                                unavailable
+                                  ? "cursor-not-allowed bg-muted/40 text-muted-foreground"
+                                  : "hover:bg-muted/50",
+                                form.roomId === room.id && !unavailable
                                   ? "bg-primary/10 ring-1 ring-inset ring-primary/30"
-                                  : ""
-                              }`}
+                                  : "",
+                              )}
+                              title={
+                                clash
+                                  ? `${holdLabel} ${formatPhDate(clash.checkInDate)} – ${formatPhDate(clash.checkOutDate)} (${clash.guestName})`
+                                  : undefined
+                              }
                             >
                               <div className="min-w-0">
                                 <span className="font-mono font-medium">{room.roomNumber}</span>
                                 <span className="text-muted-foreground ml-1.5 capitalize">{room.type}</span>
                               </div>
-                              <span className="text-xs text-muted-foreground shrink-0">₱{room.pricePerNight.toLocaleString()}/night</span>
+                              <span className="text-xs shrink-0">
+                                {clash ? (
+                                  <span className="rounded-full bg-amber-500/15 px-2 py-0.5 font-semibold uppercase tracking-wide text-amber-800 dark:text-amber-300">
+                                    {holdLabel}
+                                  </span>
+                                ) : (
+                                  <span className="text-muted-foreground">₱{room.pricePerNight.toLocaleString()}/night</span>
+                                )}
+                              </span>
                             </button>
-                          ))
+                            );
+                          })
                         )}
                       </div>
                     </div>
@@ -1347,6 +1453,7 @@ export default function Reservations({ embedded }: ReservationsProps) {
                       min={0}
                       value={form.children}
                       onChange={(e) => setForm((prev: any) => ({ ...prev, children: e.target.value }))}
+                      placeholder="0"
                       className="bg-background"
                     />
                   </div>
@@ -1399,7 +1506,10 @@ export default function Reservations({ embedded }: ReservationsProps) {
                 </div>
               </TabsContent>
 
-              <TabsContent value="guest" className="space-y-4">
+              <TabsContent
+                value="guest"
+                className="space-y-4 duration-300 data-[state=active]:animate-in data-[state=active]:fade-in-0 data-[state=active]:slide-in-from-right-6"
+              >
                 <div className="flex gap-2 p-1 bg-muted rounded-md mb-2">
                   <Button
                     type="button"
@@ -1409,15 +1519,54 @@ export default function Reservations({ embedded }: ReservationsProps) {
                   >
                     Existing Guest Profile
                   </Button>
-                  <Button
-                    type="button"
-                    variant={!useExistingGuest ? "secondary" : "ghost"}
-                    className="flex-1 text-xs h-8 shadow-none"
-                    onClick={() => setUseExistingGuest(false)}
+                  <Tooltip
+                    open={guests.length === 0 && useExistingGuest ? true : undefined}
+                    delayDuration={0}
                   >
-                    New Guest Entry
-                  </Button>
+                    <TooltipTrigger asChild>
+                      <Button
+                        type="button"
+                        variant={!useExistingGuest ? "secondary" : "ghost"}
+                        className={cn(
+                          "flex-1 text-xs h-8 shadow-none",
+                          guests.length === 0 && useExistingGuest && "ring-2 ring-primary ring-offset-2 ring-offset-background",
+                        )}
+                        onClick={() => {
+                          setUseExistingGuest(false);
+                          setGuestHintOpen(true);
+                        }}
+                      >
+                        New Guest Entry
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" className="max-w-xs">
+                      No saved guest profiles yet. Click here to enter a new guest.
+                    </TooltipContent>
+                  </Tooltip>
                 </div>
+
+                {useExistingGuest && (
+                  <div className="flex items-start gap-2.5 rounded-lg border border-sky-500/25 bg-sky-500/10 px-3 py-2.5 text-sm">
+                    <Info className="mt-0.5 h-4 w-4 shrink-0 text-sky-700 dark:text-sky-300" />
+                    <div className="min-w-0 text-sky-950 dark:text-sky-100">
+                      {guests.length === 0 ? (
+                        <>
+                          <p className="font-medium">No existing guest profiles yet</p>
+                          <p className="mt-0.5 text-xs text-sky-800/90 dark:text-sky-200/90">
+                            Click <span className="font-semibold">New Guest Entry</span> above to add this guest’s name and contact details.
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <p className="font-medium">Choose a returning guest</p>
+                          <p className="mt-0.5 text-xs text-sky-800/90 dark:text-sky-200/90">
+                            Select someone from the list, or click <span className="font-semibold">New Guest Entry</span> for a first-time visitor.
+                          </p>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 <div className="space-y-4 border rounded-lg p-4 bg-muted/30">
                   {useExistingGuest ? (
@@ -1426,7 +1575,14 @@ export default function Reservations({ embedded }: ReservationsProps) {
                         <Users className="w-3.5 h-3.5" />
                         Guest Search
                       </Label>
-                      <div className="rounded-lg border bg-card overflow-hidden">
+                      <Tooltip open={guestHintOpen} onOpenChange={setGuestHintOpen} delayDuration={0}>
+                        <TooltipTrigger asChild>
+                          <div
+                            className={cn(
+                              "rounded-lg border bg-card overflow-hidden transition-shadow",
+                              guestHintOpen && "ring-2 ring-primary shadow-md",
+                            )}
+                          >
                         {/* Sticky search */}
                         <div className="sticky top-0 z-[1] bg-card border-b px-2 py-2">
                           <div className="relative">
@@ -1442,13 +1598,38 @@ export default function Reservations({ embedded }: ReservationsProps) {
                         {/* Scrollable guest list */}
                         <div className="max-h-[200px] overflow-y-auto divide-y">
                           {guestsFiltered.length === 0 ? (
-                            <p className="text-xs text-muted-foreground text-center py-4">No guests match the filter.</p>
+                            <div className="px-3 py-5 text-center">
+                              <p className="text-sm font-medium">
+                                {guests.length === 0
+                                  ? "No guest profiles saved yet"
+                                  : "No guests match the filter"}
+                              </p>
+                              <p className="mt-1 text-xs text-muted-foreground">
+                                {guests.length === 0
+                                  ? "Use New Guest Entry to create this guest now."
+                                  : "Try a different search, or add them as a new guest."}
+                              </p>
+                              <Button
+                                type="button"
+                                size="sm"
+                                className="mt-3"
+                                onClick={() => {
+                                  setUseExistingGuest(false);
+                                  setGuestHintOpen(true);
+                                }}
+                              >
+                                New Guest Entry
+                              </Button>
+                            </div>
                           ) : (
                             guestsFiltered.map((guest) => (
                               <button
                                 key={guest.id}
                                 type="button"
-                                onClick={() => setForm((prev: any) => ({ ...prev, guestId: guest.id }))}
+                                onClick={() => {
+                                  setForm((prev: any) => ({ ...prev, guestId: guest.id }));
+                                  setGuestHintOpen(false);
+                                }}
                                 className={`w-full flex items-center justify-between gap-3 px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted/50 ${
                                   form.guestId === guest.id
                                     ? "bg-primary/10 ring-1 ring-inset ring-primary/30"
@@ -1463,17 +1644,33 @@ export default function Reservations({ embedded }: ReservationsProps) {
                             ))
                           )}
                         </div>
-                      </div>
+                          </div>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-xs">
+                          Select a guest from this list to complete the reservation
+                        </TooltipContent>
+                      </Tooltip>
                     </div>
                   ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <Tooltip open={guestHintOpen} onOpenChange={setGuestHintOpen} delayDuration={0}>
+                      <TooltipTrigger asChild>
+                        <div
+                          className={cn(
+                            "grid grid-cols-1 md:grid-cols-2 gap-4 rounded-md transition-shadow",
+                            guestHintOpen && "ring-2 ring-primary p-3 -m-1",
+                          )}
+                        >
                       <div className="space-y-2">
                         <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground font-bold">
                           <User className="w-3.5 h-3.5" /> First Name
                         </Label>
                         <Input
                           value={form.firstName || ""}
-                          onChange={(e) => setForm((prev: any) => ({ ...prev, firstName: e.target.value }))}
+                          onChange={(e) => {
+                            const firstName = e.target.value;
+                            setForm((prev: any) => ({ ...prev, firstName }));
+                            if (firstName.trim() && form.lastName?.trim()) setGuestHintOpen(false);
+                          }}
                           className="bg-background"
                         />
                       </div>
@@ -1483,7 +1680,11 @@ export default function Reservations({ embedded }: ReservationsProps) {
                         </Label>
                         <Input
                           value={form.lastName || ""}
-                          onChange={(e) => setForm((prev: any) => ({ ...prev, lastName: e.target.value }))}
+                          onChange={(e) => {
+                            const lastName = e.target.value;
+                            setForm((prev: any) => ({ ...prev, lastName }));
+                            if (form.firstName?.trim() && lastName.trim()) setGuestHintOpen(false);
+                          }}
                           className="bg-background"
                         />
                       </div>
@@ -1519,7 +1720,12 @@ export default function Reservations({ embedded }: ReservationsProps) {
                           placeholder="Full residential or business address"
                         />
                       </div>
-                    </div>
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs">
+                        Enter the guest’s first and last name to continue
+                      </TooltipContent>
+                    </Tooltip>
                   )}
                 </div>
 
@@ -1537,8 +1743,9 @@ export default function Reservations({ embedded }: ReservationsProps) {
                 </div>
               </TabsContent>
             </Tabs>
+            </div>
 
-            <DialogFooter className="mt-6 gap-2 sm:gap-0 border-t pt-4">
+            <DialogFooter className="mt-0 shrink-0 gap-2 border-t pt-4 sm:gap-0">
               <Button type="button" variant="ghost" onClick={() => setIsCreateOpen(false)} className="flex-1 sm:flex-none">
                 Discard Changes
               </Button>
@@ -1576,7 +1783,7 @@ export default function Reservations({ embedded }: ReservationsProps) {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {isLoading ? (
+            {isLoading && filteredReservations.length === 0 ? (
               Array.from({ length: 5 }).map((_, i) => (
                 <TableRow key={i}>
                   <TableCell><Skeleton className="h-4 w-[120px]" /></TableCell>
