@@ -1,17 +1,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Eye, EyeOff, Loader2 } from "lucide-react";
-import { createClient } from "@/lib/supabase/client";
+import { consumeLoginError } from "@/lib/auth-messages";
 import {
-  ACCOUNT_INACTIVE_MESSAGE,
-  consumeLoginError,
-  stashLoginError,
-} from "@/lib/auth-messages";
+  SESSION_NONCE_STORAGE_KEY,
+  SESSION_REPLACED_MESSAGE,
+} from "@/lib/auth-session";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -38,7 +36,6 @@ const loginSchema = z.object({
 });
 
 export default function LoginPage() {
-  const router = useRouter();
   const { toast } = useToast();
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -53,6 +50,19 @@ export default function LoginPage() {
   });
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("reason") === "replaced") {
+      setError(SESSION_REPLACED_MESSAGE);
+      toast({
+        title: "Signed out",
+        description: SESSION_REPLACED_MESSAGE,
+        variant: "destructive",
+      });
+      const url = new URL(window.location.href);
+      url.searchParams.delete("reason");
+      window.history.replaceState({}, "", url.pathname);
+      return;
+    }
     const stashed = consumeLoginError();
     if (!stashed) return;
     setError(stashed);
@@ -63,71 +73,53 @@ export default function LoginPage() {
     });
   }, [toast]);
 
-  function showInactiveError() {
-    stashLoginError(ACCOUNT_INACTIVE_MESSAGE);
-    setError(ACCOUNT_INACTIVE_MESSAGE);
-    toast({
-      title: "Sign in blocked",
-      description: ACCOUNT_INACTIVE_MESSAGE,
-      variant: "destructive",
-    });
-  }
-
   async function onSubmit(values: z.infer<typeof loginSchema>) {
     setLoading(true);
     setError(null);
-    const supabase = createClient();
-    const { data: signInData, error: signInError } =
-      await supabase.auth.signInWithPassword({
-        email: values.email,
-        password: values.password,
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: values.email.trim(),
+          password: values.password,
+        }),
       });
+      const data = (await res.json().catch(() => null)) as {
+        error?: string;
+        sessionNonce?: string;
+      } | null;
 
-    if (signInError) {
+      if (!res.ok) {
+        const message = data?.error || "Sign in failed. Please try again.";
+        setError(message);
+        toast({
+          title: res.status === 429 ? "Too many attempts" : "Sign in failed",
+          description: message,
+          variant: "destructive",
+        });
+        setLoading(false);
+        return;
+      }
+
+      if (data?.sessionNonce) {
+        try {
+          localStorage.setItem(SESSION_NONCE_STORAGE_KEY, data.sessionNonce);
+        } catch {
+          // ignore
+        }
+      }
+
+      window.location.assign("/dashboard");
+    } catch {
       setLoading(false);
-      setError(signInError.message);
+      setError("Could not reach the server. Please try again.");
       toast({
         title: "Sign in failed",
-        description: signInError.message,
+        description: "Could not reach the server. Please try again.",
         variant: "destructive",
       });
-      return;
     }
-
-    const userId = signInData.user?.id;
-    if (!userId) {
-      setLoading(false);
-      setError("Sign in failed. Please try again.");
-      return;
-    }
-
-    const { data: profile, error: profileError } = await supabase
-      .from("profiles")
-      .select("is_active")
-      .eq("id", userId)
-      .maybeSingle();
-
-    if (profileError) {
-      await supabase.auth.signOut();
-      setLoading(false);
-      setError(profileError.message);
-      toast({
-        title: "Sign in failed",
-        description: profileError.message,
-        variant: "destructive",
-      });
-      return;
-    }
-
-    if (!profile || profile.is_active === false) {
-      await supabase.auth.signOut();
-      setLoading(false);
-      showInactiveError();
-      return;
-    }
-
-    router.push("/dashboard");
-    router.refresh();
   }
 
   return (

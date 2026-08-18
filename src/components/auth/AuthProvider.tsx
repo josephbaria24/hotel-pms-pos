@@ -17,6 +17,10 @@ import {
   ACCOUNT_INACTIVE_MESSAGE,
   stashLoginError,
 } from "@/lib/auth-messages";
+import {
+  SESSION_NONCE_STORAGE_KEY,
+  SESSION_REPLACED_MESSAGE,
+} from "@/lib/auth-session";
 
 interface AuthContextType {
   user: User | null;
@@ -33,6 +37,22 @@ const AuthContext = createContext<AuthContextType>({
   logout: () => {},
   refresh: async () => {},
 });
+
+function storedSessionNonce() {
+  try {
+    return localStorage.getItem(SESSION_NONCE_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function clearStoredSessionNonce() {
+  try {
+    localStorage.removeItem(SESSION_NONCE_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+}
 
 function mapAuthUser(
   authUser: AuthUser,
@@ -62,6 +82,12 @@ function mapAuthUser(
   };
 }
 
+function sessionWasReplaced(profile: { session_nonce?: string | null } | null) {
+  const expected = profile?.session_nonce;
+  if (!expected) return false;
+  return storedSessionNonce() !== expected;
+}
+
 /** Load profile for a known auth user. Does not call auth.getUser/getSession. */
 async function loadProfileForUser(authUser: AuthUser): Promise<User | null> {
   const supabase = createClient();
@@ -73,7 +99,16 @@ async function loadProfileForUser(authUser: AuthUser): Promise<User | null> {
 
   if (profile && profile.is_active === false) {
     stashLoginError(ACCOUNT_INACTIVE_MESSAGE);
-    // Defer signOut so we never call it under an auth-state lock.
+    clearStoredSessionNonce();
+    setTimeout(() => {
+      void createClient().auth.signOut();
+    }, 0);
+    return null;
+  }
+
+  if (sessionWasReplaced(profile)) {
+    stashLoginError(SESSION_REPLACED_MESSAGE);
+    clearStoredSessionNonce();
     setTimeout(() => {
       void createClient().auth.signOut();
     }, 0);
@@ -112,6 +147,73 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let mounted = true;
+    const supabase = createClient();
+    let sessionChannel: ReturnType<typeof supabase.channel> | null = null;
+
+    const stopWatching = () => {
+      if (sessionChannel) {
+        void supabase.removeChannel(sessionChannel);
+        sessionChannel = null;
+      }
+    };
+
+    const kickIfNonceMismatch = (remoteNonce: string | null | undefined) => {
+      if (!remoteNonce || storedSessionNonce() === remoteNonce) return false;
+      stashLoginError(SESSION_REPLACED_MESSAGE);
+      clearStoredSessionNonce();
+      setUserState(null);
+      redirectToLoginIfNeeded(router);
+      setTimeout(() => {
+        void createClient().auth.signOut();
+      }, 0);
+      return true;
+    };
+
+    const watchSession = (userId: string) => {
+      stopWatching();
+      sessionChannel = supabase
+        .channel(`profile-session:${userId}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "UPDATE",
+            schema: "public",
+            table: "profiles",
+            filter: `id=eq.${userId}`,
+          },
+          (payload) => {
+            const nonce = (payload.new as { session_nonce?: string | null })
+              .session_nonce;
+            kickIfNonceMismatch(nonce);
+          },
+        )
+        .subscribe();
+    };
+
+    const verifyRemoteSession = async () => {
+      const {
+        data: { user: authUser },
+      } = await supabase.auth.getUser();
+      if (!authUser) return;
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("session_nonce, is_active")
+        .eq("id", authUser.id)
+        .maybeSingle();
+      if (profile?.is_active === false) {
+        stashLoginError(ACCOUNT_INACTIVE_MESSAGE);
+        clearStoredSessionNonce();
+        setUserState(null);
+        redirectToLoginIfNeeded(router);
+        setTimeout(() => {
+          void createClient().auth.signOut();
+        }, 0);
+        return;
+      }
+      if (!kickIfNonceMismatch(profile?.session_nonce)) {
+        watchSession(authUser.id);
+      }
+    };
 
     (async () => {
       try {
@@ -119,22 +221,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (!mounted) return;
         setUserState(profile);
         if (!profile) redirectToLoginIfNeeded(router);
+        else {
+          const {
+            data: { user: authUser },
+          } = await supabase.auth.getUser();
+          if (authUser) watchSession(authUser.id);
+        }
       } finally {
         if (mounted) setIsLoading(false);
       }
     })();
 
-    const supabase = createClient();
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
-      // CRITICAL: never await supabase.auth.* directly inside this callback.
-      // Doing so deadlocks signOut()/signIn() and causes infinite loading.
       setTimeout(() => {
         void (async () => {
           if (!mounted) return;
 
           if (event === "SIGNED_OUT" || !session?.user) {
+            stopWatching();
             setUserState(null);
             return;
           }
@@ -142,14 +248,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const profile = await loadProfileForUser(session.user);
           if (!mounted) return;
           setUserState(profile);
-          if (!profile) redirectToLoginIfNeeded(router);
+          if (!profile) {
+            stopWatching();
+            redirectToLoginIfNeeded(router);
+            return;
+          }
+          watchSession(session.user.id);
         })();
       }, 0);
     });
 
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        void verifyRemoteSession();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    const poll = window.setInterval(() => {
+      void verifyRemoteSession();
+    }, 20_000);
+
     return () => {
       mounted = false;
+      stopWatching();
       subscription.unsubscribe();
+      document.removeEventListener("visibilitychange", onVisible);
+      window.clearInterval(poll);
     };
   }, [router]);
 
@@ -158,6 +282,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const logout = useCallback(() => {
+    clearStoredSessionNonce();
     setUserState(null);
     router.replace("/login");
     const supabase = createClient();
