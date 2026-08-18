@@ -1330,23 +1330,35 @@ export function useListUsers() {
   });
 }
 
+async function readApiError(res: Response, fallback: string) {
+  const body = (await res.json().catch(() => null)) as { error?: string } | null;
+  throw new Error(body?.error || fallback);
+}
+
 export function useCreateUser() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (_input: {
+    mutationFn: async (input: {
       data: {
         fullName: string;
         username: string;
+        email: string;
         password: string;
         role: string;
         isActive: boolean;
       };
     }) => {
-      throw new Error(
-        "Create staff in Supabase Auth (Dashboard → Authentication → Users).",
-      );
+      const res = await fetch("/api/admin/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input.data),
+      });
+      if (!res.ok) await readApiError(res, "Could not create user.");
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.users }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.users });
+      qc.invalidateQueries({ queryKey: qk.classroom });
+    },
   });
 }
 
@@ -1358,25 +1370,23 @@ export function useUpdateUser() {
       data: {
         fullName?: string;
         username?: string;
+        email?: string;
         role?: string;
         isActive?: boolean;
         password?: string;
       };
     }) => {
-      const supabase = createClient();
-      const { error } = await supabase
-        .from("profiles")
-        .update({
-          full_name: input.data.fullName,
-          username: input.data.username,
-          role: input.data.role,
-          is_active: input.data.isActive,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", input.id);
-      if (error) throw error;
+      const res = await fetch("/api/admin/users", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: input.id, ...input.data }),
+      });
+      if (!res.ok) await readApiError(res, "Could not update user.");
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.users }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.users });
+      qc.invalidateQueries({ queryKey: qk.classroom });
+    },
   });
 }
 

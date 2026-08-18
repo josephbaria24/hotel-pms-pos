@@ -50,6 +50,7 @@ export default function Users() {
 
   // Form fields
   const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState("staff");
@@ -66,6 +67,7 @@ export default function Users() {
     setDialogType("add");
     setSelectedUserId(null);
     setFullName("");
+    setEmail("");
     setUsername("");
     setPassword("");
     setRole("staff");
@@ -77,6 +79,7 @@ export default function Users() {
     setDialogType("edit");
     setSelectedUserId(user.id);
     setFullName(user.fullName || "");
+    setEmail(user.email || "");
     setUsername(user.username || "");
     setPassword(user.password || "");
     setRole(user.role || "staff");
@@ -86,10 +89,27 @@ export default function Users() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!fullName.trim() || !username.trim() || !password.trim()) {
+    const emailValue = email.trim().toLowerCase();
+    if (!fullName.trim() || !emailValue || !password.trim()) {
       toast({
         title: "Validation error",
-        description: "All fields are required.",
+        description: "Full name, email, and password are required.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailValue)) {
+      toast({
+        title: "Validation error",
+        description: "Enter a valid email address. Staff sign in with email.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (password.trim().length < 6) {
+      toast({
+        title: "Validation error",
+        description: "Password must be at least 6 characters.",
         variant: "destructive",
       });
       return;
@@ -99,9 +119,10 @@ export default function Users() {
       if (dialogType === "add") {
         await createUserMutation.mutateAsync({
           data: {
-            fullName,
-            username,
-            password,
+            fullName: fullName.trim(),
+            username: username.trim() || emailValue.split("@")[0] || "",
+            email: emailValue,
+            password: password.trim(),
             role,
             isActive,
           },
@@ -114,9 +135,10 @@ export default function Users() {
         await updateUserMutation.mutateAsync({
           id: selectedUserId,
           data: {
-            fullName,
-            username,
-            password,
+            fullName: fullName.trim(),
+            username: username.trim() || emailValue.split("@")[0] || "",
+            email: emailValue,
+            password: password.trim(),
             role,
             isActive,
           },
@@ -311,7 +333,7 @@ export default function Users() {
 
       {/* Add / Edit Dialog */}
       <Dialog open={isOpen} onOpenChange={setIsOpen}>
-        <DialogContent className="sm:max-w-[425px]">
+        <DialogContent className="sm:max-w-[425px] max-h-[90vh] overflow-y-auto">
           <form onSubmit={handleSubmit}>
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2 text-xl font-bold">
@@ -329,8 +351,8 @@ export default function Users() {
               </DialogTitle>
               <DialogDescription>
                 {dialogType === "add" 
-                  ? "Create a new account with customized access levels and permissions."
-                  : "Modify the user's details, password, and active role settings."
+                  ? "Staff sign in with this email and password on the login page."
+                  : "Update login email, password, and role. Sign-in uses email, not username."
                 }
               </DialogDescription>
             </DialogHeader>
@@ -349,14 +371,34 @@ export default function Users() {
               </div>
 
               <div className="grid gap-2">
+                <Label htmlFor="email" className="font-semibold text-xs uppercase tracking-wider text-muted-foreground">Email</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  autoComplete="off"
+                  placeholder="e.g. maria.santos@gmail.com"
+                  value={email}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setEmail(next);
+                    if (dialogType === "add" && !username.trim()) {
+                      const local = next.split("@")[0]?.replace(/[^a-zA-Z0-9._-]/g, "") ?? "";
+                      setUsername(local);
+                    }
+                  }}
+                  className="bg-muted/30 focus-visible:ring-primary"
+                  required
+                />
+              </div>
+
+              <div className="grid gap-2">
                 <Label htmlFor="username" className="font-semibold text-xs uppercase tracking-wider text-muted-foreground">Username</Label>
                 <Input
                   id="username"
-                  placeholder="e.g. maria_s"
+                  placeholder="Optional display name"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   className="bg-muted/30 focus-visible:ring-primary font-mono"
-                  required
                 />
               </div>
 

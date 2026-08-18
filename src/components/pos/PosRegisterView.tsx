@@ -305,19 +305,19 @@ export function PosRegisterView() {
       description="Ring up walk-in sales, room charges, and F&B orders."
       icon={ShoppingCart}
     >
-      <div className="grid gap-4 xl:grid-cols-[1.55fr_1fr]">
-        <div className="space-y-4">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-            <div className="relative flex-1">
+      <div className="grid gap-3 pb-20 xl:grid-cols-[1.55fr_1fr] xl:gap-4 xl:pb-0">
+        <div className="space-y-2.5 sm:space-y-4">
+          <div className="sticky top-0 z-10 -mx-1 space-y-2 rounded-xl bg-background/90 px-1 py-1.5 backdrop-blur-md sm:static sm:mx-0 sm:bg-transparent sm:p-0 sm:backdrop-blur-none">
+            <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
-                className="pl-9"
+                className="h-9 pl-9 sm:h-10"
                 placeholder="Search products or SKU…"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
               />
             </div>
-            <div className="flex gap-2 overflow-x-auto pb-1">
+            <div className="flex gap-1.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               <FilterChip
                 active={categoryId === "all"}
                 onClick={() => setCategoryId("all")}
@@ -342,48 +342,64 @@ export function PosRegisterView() {
           {productsLoading ? (
             <p className="text-sm text-muted-foreground">Loading catalog…</p>
           ) : activeProducts.length === 0 ? (
-            <Card className="border-dashed">
-              <CardContent className="py-10 text-center text-sm text-muted-foreground">
+            <Card className="border-dashed bg-muted/40">
+              <CardContent className="py-8 text-center text-sm text-muted-foreground">
                 No products match. Add items under Products.
               </CardContent>
             </Card>
           ) : (
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {activeProducts.map((product) => (
+            <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-3">
+              {activeProducts.map((product) => {
+                const out = product.trackStock && product.stockQty <= 0;
+                return (
                 <button
                   key={product.id}
                   type="button"
                   onClick={() => addProduct(product)}
-                  className="rounded-xl border border-border/80 bg-card px-4 py-4 text-left transition-colors hover:border-teal-500/40 hover:bg-teal-500/5"
+                  className={cn(
+                    "rounded-xl border px-2.5 py-2.5 text-left transition-all sm:px-3.5 sm:py-3.5",
+                    "active:scale-[0.98] hover:brightness-[0.97] dark:hover:brightness-110",
+                    productTileTone(product.categoryName),
+                    out && "opacity-55",
+                  )}
                 >
-                  <div className="font-medium leading-snug">{product.name}</div>
-                  <div className="mt-1 text-sm text-muted-foreground">
+                  <div className="line-clamp-2 text-[13px] font-semibold leading-snug sm:text-sm">
+                    {product.name}
+                  </div>
+                  <div className="mt-1 text-sm font-bold tabular-nums tracking-tight">
                     {formatPeso(product.price)}
                   </div>
-                  <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1 text-[10px] font-medium uppercase tracking-wide opacity-80">
                     {product.categoryName && <span>{product.categoryName}</span>}
                     {product.trackStock && (
                       <span
                         className={cn(
-                          product.stockQty <= 0 && "text-destructive font-medium",
+                          "rounded-full bg-black/10 px-1.5 py-0.5 dark:bg-white/10",
+                          out && "bg-destructive/15 text-destructive opacity-100",
                         )}
                       >
-                        Stock {product.stockQty}
+                        {out ? "Out" : `Stock ${product.stockQty}`}
                       </span>
                     )}
                     {product.isQuickSell && (
-                      <span className="text-teal-600 dark:text-teal-400">Quick</span>
+                      <span className="rounded-full bg-black/10 px-1.5 py-0.5 dark:bg-white/10">
+                        Quick
+                      </span>
                     )}
                   </div>
                 </button>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
 
-        <Card className="border-border/70 h-fit xl:sticky xl:top-2">
-          <CardHeader className="pb-3">
-            <CardTitle className="flex items-center justify-between text-base">
+        <Card
+          id="pos-ticket"
+          className="h-fit scroll-mt-3 border-teal-900/10 bg-gradient-to-b from-teal-50 to-emerald-50/80 dark:border-teal-500/20 dark:from-teal-950/50 dark:to-emerald-950/20 xl:sticky xl:top-2"
+        >
+          <CardHeader className="p-3 pb-2 sm:p-6 sm:pb-3">
+            <CardTitle className="flex items-center justify-between text-sm sm:text-base">
               <span>Current ticket</span>
               {orderId && (
                 <span className="text-xs font-normal text-muted-foreground">
@@ -392,7 +408,7 @@ export function PosRegisterView() {
               )}
             </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-3 p-3 pt-0 sm:space-y-4 sm:p-6 sm:pt-0">
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label>Order type</Label>
@@ -474,7 +490,7 @@ export function PosRegisterView() {
                 cart.map((line) => (
                   <div
                     key={line.key}
-                    className="flex items-center gap-2 rounded-lg border border-border/70 bg-muted/20 px-2.5 py-2"
+                    className="flex items-center gap-2 rounded-lg border border-teal-900/10 bg-white/70 px-2.5 py-2 dark:border-teal-500/20 dark:bg-teal-950/40"
                   >
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-sm font-medium">
@@ -558,7 +574,7 @@ export function PosRegisterView() {
               />
             </div>
 
-            <div className="space-y-1.5 border-t pt-3 text-sm">
+            <div className="space-y-1.5 rounded-xl bg-white/70 px-3 py-2.5 text-sm dark:bg-teal-950/40">
               <Row label="Subtotal" value={formatPeso(subtotal)} />
               <Row label="Discount" value={`−${formatPeso(discountClamped)}`} />
               <Row label={`Tax (${taxRate}%)`} value={formatPeso(taxAmount)} />
@@ -632,6 +648,36 @@ export function PosRegisterView() {
             </div>
           </CardContent>
         </Card>
+      </div>
+
+      <div className="fixed inset-x-0 bottom-0 z-30 border-t border-teal-900/10 bg-teal-50/95 px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] shadow-[0_-8px_24px_rgba(13,148,136,0.12)] backdrop-blur-md dark:border-teal-500/20 dark:bg-teal-950/90 xl:hidden">
+        <div className="mx-auto flex max-w-7xl gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            className="h-11 min-w-0 flex-1 border-teal-700/20 bg-white/80 dark:bg-teal-900/40"
+            onClick={() =>
+              document.getElementById("pos-ticket")?.scrollIntoView({ behavior: "smooth", block: "start" })
+            }
+          >
+            <ShoppingCart className="mr-1.5 h-4 w-4 shrink-0" />
+            <span className="truncate">
+              {cart.length} item{cart.length === 1 ? "" : "s"} · {formatPeso(total)}
+            </span>
+          </Button>
+          <Button
+            type="button"
+            className="h-11 flex-1 bg-teal-600 hover:bg-teal-700"
+            disabled={!cart.length || saveOrder.isPending}
+            onClick={() => {
+              if (orderType === "room_charge") setPayMethod("room_charge");
+              setChargeOpen(true);
+            }}
+          >
+            <CreditCard className="mr-1.5 h-4 w-4" />
+            Charge
+          </Button>
+        </div>
       </div>
 
       <Dialog open={chargeOpen} onOpenChange={setChargeOpen}>
@@ -738,10 +784,10 @@ function FilterChip({
       type="button"
       onClick={onClick}
       className={cn(
-        "shrink-0 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors",
+        "shrink-0 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors sm:px-3 sm:py-1.5 sm:text-xs",
         active
-          ? "border-teal-600 bg-teal-600 text-white"
-          : "border-border bg-card text-muted-foreground hover:border-teal-500/40 hover:text-foreground",
+          ? "border-teal-700 bg-teal-600 text-white shadow-sm"
+          : "border-teal-900/10 bg-teal-50 text-teal-900 hover:border-teal-500/40 hover:bg-teal-100 dark:border-teal-500/20 dark:bg-teal-950/40 dark:text-teal-100",
       )}
     >
       {label}
@@ -756,4 +802,32 @@ function Row({ label, value }: { label: string; value: string }) {
       <span className="text-foreground">{value}</span>
     </div>
   );
+}
+
+const PRODUCT_TONES = [
+  "border-sky-300/80 bg-sky-100 text-sky-950 dark:border-sky-700/60 dark:bg-sky-950/55 dark:text-sky-50",
+  "border-amber-300/80 bg-amber-100 text-amber-950 dark:border-amber-700/60 dark:bg-amber-950/55 dark:text-amber-50",
+  "border-violet-300/80 bg-violet-100 text-violet-950 dark:border-violet-700/60 dark:bg-violet-950/50 dark:text-violet-50",
+  "border-rose-300/80 bg-rose-100 text-rose-950 dark:border-rose-700/60 dark:bg-rose-950/50 dark:text-rose-50",
+  "border-emerald-300/80 bg-emerald-100 text-emerald-950 dark:border-emerald-700/60 dark:bg-emerald-950/50 dark:text-emerald-50",
+  "border-orange-300/80 bg-orange-100 text-orange-950 dark:border-orange-700/60 dark:bg-orange-950/50 dark:text-orange-50",
+];
+
+function productTileTone(categoryName?: string | null) {
+  const key = (categoryName ?? "").trim().toLowerCase();
+  if (key.includes("bever")) {
+    return "border-sky-300/80 bg-sky-100 text-sky-950 dark:border-sky-700/60 dark:bg-sky-950/55 dark:text-sky-50";
+  }
+  if (key.includes("food") || key.includes("meal") || key.includes("snack")) {
+    return "border-amber-300/80 bg-amber-100 text-amber-950 dark:border-amber-700/60 dark:bg-amber-950/55 dark:text-amber-50";
+  }
+  if (key.includes("service")) {
+    return "border-violet-300/80 bg-violet-100 text-violet-950 dark:border-violet-700/60 dark:bg-violet-950/50 dark:text-violet-50";
+  }
+  if (!key) {
+    return "border-teal-300/80 bg-teal-100 text-teal-950 dark:border-teal-700/60 dark:bg-teal-950/50 dark:text-teal-50";
+  }
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+  return PRODUCT_TONES[h % PRODUCT_TONES.length]!;
 }

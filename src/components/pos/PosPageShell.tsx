@@ -8,6 +8,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 
 export function PosPageShell({
   title,
@@ -21,14 +22,20 @@ export function PosPageShell({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="space-y-4 sm:space-y-6">
-      <div className="flex items-start gap-3 sm:gap-4">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-teal-500/15 text-teal-600 dark:text-teal-400 sm:h-12 sm:w-12">
-          <Icon className="h-5 w-5 sm:h-6 sm:w-6" />
+    <div className="space-y-3 sm:space-y-6">
+      <div className="flex items-center gap-2.5 sm:items-start sm:gap-4">
+        <div
+          className={cn(
+            "flex h-8 w-8 shrink-0 items-center justify-center rounded-xl",
+            "bg-teal-500/20 text-teal-700 dark:bg-teal-500/15 dark:text-teal-400",
+            "sm:h-12 sm:w-12 sm:rounded-2xl",
+          )}
+        >
+          <Icon className="h-4 w-4 sm:h-6 sm:w-6" />
         </div>
         <div className="min-w-0">
-          <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">{title}</h1>
-          <p className="text-sm text-muted-foreground">{description}</p>
+          <h1 className="text-lg font-semibold tracking-tight sm:text-2xl">{title}</h1>
+          <p className="hidden text-sm text-muted-foreground sm:block">{description}</p>
         </div>
       </div>
       {children ?? (
