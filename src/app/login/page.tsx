@@ -94,7 +94,7 @@ export default function LoginPage() {
         const message = data?.error || "Sign in failed. Please try again.";
         setError(message);
         toast({
-          title: res.status === 429 ? "Too many attempts" : "Sign in failed",
+          title: "Sign in failed",
           description: message,
           variant: "destructive",
         });

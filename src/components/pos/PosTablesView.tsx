@@ -2,9 +2,16 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { LayoutGrid, Pencil, Plus, Trash2 } from "lucide-react";
+import {
+  EllipsisVertical,
+  LayoutGrid,
+  Pencil,
+  Plus,
+  Sparkles,
+  Trash2,
+  Users,
+} from "lucide-react";
 import { PosPageShell } from "@/components/pos/PosPageShell";
-import { PosTableStatusBadge } from "@/components/pos/PosBadges";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -14,6 +21,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -59,6 +73,30 @@ const emptyForm: FormState = {
   notes: "",
 };
 
+const STATUS_LABEL: Record<PosTableStatus, string> = {
+  available: "Available",
+  occupied: "Occupied",
+  reserved: "Reserved",
+  dirty: "Dirty",
+  inactive: "Inactive",
+};
+
+const STATUS_DOT: Record<PosTableStatus, string> = {
+  available: "bg-emerald-500",
+  occupied: "bg-orange-500",
+  reserved: "bg-sky-500",
+  dirty: "bg-rose-500",
+  inactive: "bg-muted-foreground/50",
+};
+
+const STATUS_CARD: Record<PosTableStatus, string> = {
+  available: "border-emerald-500/25 bg-emerald-500/[0.04]",
+  occupied: "border-orange-500/30 bg-orange-500/[0.06]",
+  reserved: "border-sky-500/30 bg-sky-500/[0.05]",
+  dirty: "border-rose-500/30 bg-rose-500/[0.05]",
+  inactive: "border-border/60 bg-muted/30 opacity-70",
+};
+
 export function PosTablesView() {
   const { data: tables = [], isLoading } = usePosTables();
   const createTable = useCreatePosTable();
@@ -79,6 +117,18 @@ export function PosTablesView() {
       map.set(t.zone, list);
     }
     return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  }, [tables]);
+
+  const statusCounts = useMemo(() => {
+    const counts: Record<PosTableStatus, number> = {
+      available: 0,
+      occupied: 0,
+      reserved: 0,
+      dirty: 0,
+      inactive: 0,
+    };
+    for (const t of tables) counts[t.status] += 1;
+    return counts;
   }, [tables]);
 
   const openCreate = () => {
@@ -132,7 +182,7 @@ export function PosTablesView() {
   const setStatus = async (table: PosTable, status: PosTableStatus) => {
     try {
       await updateTable.mutateAsync({ id: table.id, status });
-      toast({ title: `${table.name} → ${status}` });
+      toast({ title: `${table.name} → ${STATUS_LABEL[status]}` });
     } catch (err) {
       toast({
         title: "Status update failed",
@@ -162,13 +212,33 @@ export function PosTablesView() {
       title="Floor plan"
       description="Table / outlet layout for restaurant-style POS service."
       icon={LayoutGrid}
-    >
-      <div className="mb-4 flex justify-end">
-        <Button className="bg-teal-600 hover:bg-teal-700" onClick={openCreate}>
-          <Plus className="mr-1.5 h-4 w-4" />
-          Add table
+      action={
+        <Button
+          className="h-8 rounded-full bg-teal-600 px-3 text-xs hover:bg-teal-700 sm:h-9 sm:px-4 sm:text-sm"
+          onClick={openCreate}
+        >
+          <Plus className="h-3.5 w-3.5 sm:mr-1.5 sm:h-4 sm:w-4" />
+          <span className="hidden sm:inline">Add table</span>
+          <span className="sm:hidden">Add</span>
         </Button>
-      </div>
+      }
+    >
+      {tables.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+          {(["available", "occupied", "reserved", "dirty"] as const).map((status) =>
+            statusCounts[status] > 0 ? (
+              <span
+                key={status}
+                className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-card px-2 py-0.5 text-[10px] font-medium text-muted-foreground sm:text-[11px]"
+              >
+                <span className={cn("h-1.5 w-1.5 rounded-full", STATUS_DOT[status])} />
+                {STATUS_LABEL[status]}
+                <span className="tabular-nums text-foreground">{statusCounts[status]}</span>
+              </span>
+            ) : null,
+          )}
+        </div>
+      ) : null}
 
       {isLoading ? (
         <p className="text-sm text-muted-foreground">Loading floor plan…</p>
@@ -179,97 +249,116 @@ export function PosTablesView() {
           </CardContent>
         </Card>
       ) : (
-        <div className="space-y-8">
+        <div className="space-y-4 sm:space-y-6">
           {zones.map(([zone, zoneTables]) => (
-            <section key={zone} className="space-y-3">
-              <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-                {zone}
-              </h2>
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            <section key={zone} className="space-y-2 sm:space-y-3">
+              <div className="flex items-center gap-2">
+                <h2 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground sm:text-xs">
+                  {zone}
+                </h2>
+                <span className="rounded-full bg-muted px-1.5 py-px text-[10px] tabular-nums text-muted-foreground">
+                  {zoneTables.length}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-2 sm:gap-3 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
                 {zoneTables.map((table) => (
-                  <Card
+                  <article
                     key={table.id}
                     className={cn(
-                      "border-border/70 transition-colors",
-                      table.status === "occupied" && "border-orange-500/40 bg-orange-500/5",
-                      table.status === "available" && "border-emerald-500/30",
-                      table.status === "dirty" && "border-rose-500/35 bg-rose-500/5",
+                      "flex flex-col rounded-xl border p-2.5 shadow-sm sm:rounded-2xl sm:p-3",
+                      STATUS_CARD[table.status],
                     )}
                   >
-                    <CardContent className="space-y-3 p-4">
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <div className="text-lg font-semibold">{table.name}</div>
-                          <p className="text-xs text-muted-foreground">
-                            {table.seats} seats
-                          </p>
+                    <div className="flex items-start gap-1">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <span
+                            className={cn("h-2 w-2 shrink-0 rounded-full", STATUS_DOT[table.status])}
+                          />
+                          <h3 className="truncate text-sm font-semibold leading-none sm:text-base">
+                            {table.name}
+                          </h3>
                         </div>
-                        <PosTableStatusBadge status={table.status} />
-                      </div>
-
-                      {table.openOrderNumber && (
-                        <p className="text-xs text-muted-foreground">
-                          Open: {table.openOrderNumber}
+                        <p className="mt-1 flex items-center gap-1 text-[10px] text-muted-foreground sm:text-[11px]">
+                          <Users className="h-3 w-3 shrink-0" />
+                          {table.seats}
+                          <span aria-hidden>·</span>
+                          <span className="truncate">{STATUS_LABEL[table.status]}</span>
                         </p>
-                      )}
-
-                      <div className="flex flex-wrap gap-2">
-                        {table.openOrderId ? (
-                          <Button asChild size="sm" className="bg-teal-600 hover:bg-teal-700">
-                            <Link href={`/pos?order=${table.openOrderId}`}>
-                              Resume order
-                            </Link>
-                          </Button>
-                        ) : table.status !== "inactive" ? (
-                          <Button asChild size="sm" variant="outline">
-                            <Link href={`/pos?table=${table.id}`}>New order</Link>
-                          </Button>
-                        ) : null}
-
-                        {table.status === "dirty" && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => setStatus(table, "available")}
-                          >
-                            Mark clean
-                          </Button>
-                        )}
-                        {table.status === "available" && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => setStatus(table, "reserved")}
-                          >
-                            Reserve
-                          </Button>
-                        )}
-                        {table.status === "reserved" && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => setStatus(table, "available")}
-                          >
-                            Unreserve
-                          </Button>
-                        )}
                       </div>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-7 w-7 shrink-0 text-muted-foreground"
+                            aria-label={`Actions for ${table.name}`}
+                          >
+                            <EllipsisVertical className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-40">
+                          {table.status === "dirty" ? (
+                            <DropdownMenuItem onClick={() => setStatus(table, "available")}>
+                              <Sparkles className="mr-2 h-3.5 w-3.5" />
+                              Mark clean
+                            </DropdownMenuItem>
+                          ) : null}
+                          {table.status === "available" ? (
+                            <DropdownMenuItem onClick={() => setStatus(table, "reserved")}>
+                              Reserve
+                            </DropdownMenuItem>
+                          ) : null}
+                          {table.status === "reserved" ? (
+                            <DropdownMenuItem onClick={() => setStatus(table, "available")}>
+                              Unreserve
+                            </DropdownMenuItem>
+                          ) : null}
+                          <DropdownMenuItem onClick={() => openEdit(table)}>
+                            <Pencil className="mr-2 h-3.5 w-3.5" />
+                            Edit
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            className="text-destructive focus:text-destructive"
+                            onClick={() => setDeleting(table)}
+                          >
+                            <Trash2 className="mr-2 h-3.5 w-3.5" />
+                            Delete
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
 
-                      <div className="flex justify-end gap-1 border-t pt-2">
-                        <Button size="icon" variant="ghost" onClick={() => openEdit(table)}>
-                          <Pencil className="h-4 w-4" />
-                        </Button>
+                    {table.openOrderNumber ? (
+                      <p className="mt-1 truncate text-[10px] font-medium text-orange-700 dark:text-orange-300">
+                        {table.openOrderNumber}
+                      </p>
+                    ) : null}
+
+                    <div className="mt-auto pt-2">
+                      {table.openOrderId ? (
                         <Button
-                          size="icon"
-                          variant="ghost"
-                          className="text-destructive"
-                          onClick={() => setDeleting(table)}
+                          asChild
+                          size="sm"
+                          className="h-7 w-full rounded-lg bg-teal-600 text-[11px] hover:bg-teal-700 sm:h-8 sm:text-xs"
                         >
-                          <Trash2 className="h-4 w-4" />
+                          <Link href={`/pos?order=${table.openOrderId}`}>Resume</Link>
                         </Button>
-                      </div>
-                    </CardContent>
-                  </Card>
+                      ) : table.status !== "inactive" ? (
+                        <Button
+                          asChild
+                          size="sm"
+                          variant="outline"
+                          className="h-7 w-full rounded-lg text-[11px] sm:h-8 sm:text-xs"
+                        >
+                          <Link href={`/pos?table=${table.id}`}>New order</Link>
+                        </Button>
+                      ) : (
+                        <p className="py-1 text-center text-[10px] text-muted-foreground">Inactive</p>
+                      )}
+                    </div>
+                  </article>
                 ))}
               </div>
             </section>

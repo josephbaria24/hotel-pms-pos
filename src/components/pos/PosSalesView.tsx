@@ -6,6 +6,8 @@ import {
   Banknote,
   ChevronLeft,
   ChevronRight,
+  Download,
+  Loader2,
   Percent,
   Receipt,
   ReceiptText,
@@ -17,26 +19,27 @@ import { PosOrderStatusBadge } from "@/components/pos/PosBadges";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useGetSettings } from "@/lib/api-client";
 import { formatPeso, usePosSalesSummary } from "@/lib/api-client/pos";
 import type { PosOrder } from "@/lib/api-client/pos-types";
+import { methodLabel } from "@/lib/pos-sales-stats";
 import { cn } from "@/lib/utils";
-
-const METHOD_LABELS: Record<string, string> = {
-  cash: "Cash",
-  card: "Card",
-  gcash: "GCash",
-  maya: "Maya",
-  bank_transfer: "Bank transfer",
-  room_charge: "Room charge",
-  other: "Other",
-  unspecified: "Unspecified",
-};
+import { useToast } from "@/hooks/use-toast";
 
 const TX_FILTERS = [
   { id: "all", label: "All" },
@@ -72,14 +75,21 @@ function formatDayLabel(dayIso: string) {
   });
 }
 
-function methodLabel(method: string) {
-  return METHOD_LABELS[method] ?? method.replaceAll("_", " ");
-}
-
 export function PosSalesView() {
   const [day, setDay] = useState(todayLocalIso);
   const [txFilter, setTxFilter] = useState<(typeof TX_FILTERS)[number]["id"]>("all");
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportFrom, setReportFrom] = useState(todayLocalIso);
+  const [reportTo, setReportTo] = useState(todayLocalIso);
+  const [reportBusy, setReportBusy] = useState(false);
+  const { toast } = useToast();
+  const { data: settings } = useGetSettings();
   const { data, isLoading } = usePosSalesSummary(day);
+  const { data: reportData, isLoading: reportLoading } = usePosSalesSummary(
+    reportFrom,
+    reportTo,
+    reportOpen,
+  );
   const isToday = day === todayLocalIso();
 
   const methodRows = useMemo(() => {
@@ -105,85 +115,103 @@ export function PosSalesView() {
       description="Daily sales totals, payment mix, and voided transactions."
       icon={Receipt}
     >
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex flex-wrap items-center gap-2">
-          <Tooltip>
-            <TooltipTrigger asChild>
+      <div className="flex items-center gap-1.5 sm:gap-2">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              size="icon"
+              variant="outline"
+              className="h-8 w-8 shrink-0 sm:h-9 sm:w-9"
+              onClick={() => setDay((d) => shiftDay(d, -1))}
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Previous business day</TooltipContent>
+        </Tooltip>
+        <div className="min-w-0 flex-1">
+          <Input
+            type="date"
+            className="h-8 w-full min-w-0 bg-background text-xs shadow-none sm:h-9 sm:max-w-[11.5rem] sm:text-sm"
+            value={day}
+            max={todayLocalIso()}
+            onChange={(e) => {
+              if (e.target.value) setDay(e.target.value);
+            }}
+            aria-label="Business day"
+          />
+          <p className="mt-0.5 truncate px-0.5 text-[10px] text-muted-foreground sm:hidden">
+            {formatDayLabel(day)}
+          </p>
+        </div>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex">
               <Button
                 type="button"
                 size="icon"
                 variant="outline"
-                className="h-9 w-9"
-                onClick={() => setDay((d) => shiftDay(d, -1))}
+                className="h-8 w-8 shrink-0 sm:h-9 sm:w-9"
+                disabled={isToday}
+                onClick={() => setDay((d) => shiftDay(d, 1))}
               >
-                <ChevronLeft className="h-4 w-4" />
+                <ChevronRight className="h-4 w-4" />
               </Button>
-            </TooltipTrigger>
-            <TooltipContent>Previous business day</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Input
-                type="date"
-                className="w-[11.5rem]"
-                value={day}
-                max={todayLocalIso()}
-                onChange={(e) => {
-                  if (e.target.value) setDay(e.target.value);
-                }}
-              />
-            </TooltipTrigger>
-            <TooltipContent>Pick a business day to review</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="inline-flex">
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="outline"
-                  className="h-9 w-9"
-                  disabled={isToday}
-                  onClick={() => setDay((d) => shiftDay(d, 1))}
-                >
-                  <ChevronRight className="h-4 w-4" />
-                </Button>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>
-              {isToday ? "Already on today" : "Next business day"}
-            </TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="inline-flex">
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={isToday}
-                  onClick={() => setDay(todayLocalIso())}
-                >
-                  Today
-                </Button>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>Jump back to today’s sales</TooltipContent>
-          </Tooltip>
-        </div>
-        <p className="text-sm text-muted-foreground">{formatDayLabel(day)}</p>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>
+            {isToday ? "Already on today" : "Next business day"}
+          </TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex">
+              <Button
+                type="button"
+                variant="outline"
+                className="h-8 rounded-full px-2.5 text-xs sm:h-9 sm:px-3 sm:text-sm"
+                disabled={isToday}
+                onClick={() => setDay(todayLocalIso())}
+              >
+                Today
+              </Button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>Jump back to today’s sales</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              className="h-8 shrink-0 rounded-full bg-teal-600 px-2.5 text-xs hover:bg-teal-700 sm:h-9 sm:px-3 sm:text-sm"
+              onClick={() => {
+                setReportFrom(day);
+                setReportTo(day);
+                setReportOpen(true);
+              }}
+            >
+              <Download className="h-3.5 w-3.5 sm:mr-1.5 sm:h-4 sm:w-4" />
+              <span className="hidden sm:inline">PDF</span>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Download a POS sales PDF</TooltipContent>
+        </Tooltip>
+        <p className="hidden text-sm text-muted-foreground lg:block">{formatDayLabel(day)}</p>
       </div>
 
       {isLoading ? (
         <p className="text-sm text-muted-foreground">Loading sales…</p>
       ) : (
         <>
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid grid-cols-2 gap-2 sm:gap-3 xl:grid-cols-4">
             <StatCard
               label="Gross sales"
               value={formatPeso(data?.gross ?? 0)}
               hint="Total collected from paid tickets, including tax"
               icon={Banknote}
               accent="teal"
+              featured
             />
             <StatCard
               label="Net sales"
@@ -191,6 +219,7 @@ export function PosSalesView() {
               hint="Paid ticket subtotal after discounts, before tax"
               icon={ShoppingBag}
               accent="sky"
+              featured
             />
             <StatCard
               label="Paid tickets"
@@ -236,14 +265,17 @@ export function PosSalesView() {
             />
           </div>
 
-          <div className="grid gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.4fr)]">
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.4fr)] lg:gap-4">
             <Card className="border-border/70">
-              <CardHeader className="pb-3">
-                <CardTitle className="flex items-center justify-between text-base">
+              <CardHeader className="p-3 pb-2 sm:p-6 sm:pb-3">
+                <CardTitle className="flex items-center justify-between text-sm sm:text-base">
                   <span>Payment mix</span>
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <Badge variant="outline" className="rounded-full font-semibold tabular-nums">
+                      <Badge
+                        variant="outline"
+                        className="h-5 rounded-full px-2 text-[10px] font-semibold tabular-nums sm:h-6 sm:text-xs"
+                      >
                         {formatPeso(methodTotal)}
                       </Badge>
                     </TooltipTrigger>
@@ -251,9 +283,9 @@ export function PosSalesView() {
                   </Tooltip>
                 </CardTitle>
               </CardHeader>
-              <CardContent className="space-y-3">
+              <CardContent className="space-y-2 p-3 pt-0 sm:space-y-3 sm:p-6 sm:pt-0">
                 {methodRows.length === 0 ? (
-                  <p className="py-6 text-center text-sm text-muted-foreground">
+                  <p className="py-4 text-center text-xs text-muted-foreground sm:py-6 sm:text-sm">
                     No payments on this day.
                   </p>
                 ) : (
@@ -262,20 +294,20 @@ export function PosSalesView() {
                     return (
                       <Tooltip key={method}>
                         <TooltipTrigger asChild>
-                          <div className="space-y-1.5 rounded-xl border border-border/60 px-3 py-2.5">
-                            <div className="flex items-center justify-between gap-2 text-sm">
+                          <div className="space-y-1 rounded-lg border border-border/60 px-2.5 py-2 sm:space-y-1.5 sm:rounded-xl sm:px-3 sm:py-2.5">
+                            <div className="flex items-center justify-between gap-2 text-xs sm:text-sm">
                               <span className="font-medium">{methodLabel(method)}</span>
                               <span className="font-semibold tabular-nums">
                                 {formatPeso(row.amount)}
                               </span>
                             </div>
-                            <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                            <div className="h-1 overflow-hidden rounded-full bg-muted sm:h-1.5">
                               <div
                                 className="h-full rounded-full bg-teal-600"
                                 style={{ width: `${Math.max(pct, pct > 0 ? 4 : 0)}%` }}
                               />
                             </div>
-                            <div className="flex justify-between text-[11px] text-muted-foreground">
+                            <div className="flex justify-between text-[10px] text-muted-foreground sm:text-[11px]">
                               <span>
                                 {row.count} {row.count === 1 ? "payment" : "payments"}
                               </span>
@@ -295,14 +327,17 @@ export function PosSalesView() {
             </Card>
 
             <Card className="border-border/70">
-              <CardHeader className="space-y-3 pb-3">
-                <CardTitle className="flex items-center justify-between text-base">
+              <CardHeader className="space-y-2 p-3 pb-2 sm:space-y-3 sm:p-6 sm:pb-3">
+                <CardTitle className="flex items-center justify-between text-sm sm:text-base">
                   <span>Transactions</span>
-                  <Badge variant="outline" className="rounded-full tabular-nums">
+                  <Badge
+                    variant="outline"
+                    className="h-5 rounded-full px-2 text-[10px] tabular-nums sm:h-6 sm:text-xs"
+                  >
                     {filteredOrders.length}
                   </Badge>
                 </CardTitle>
-                <div className="flex flex-wrap gap-1.5">
+                <div className="flex flex-wrap gap-1 sm:gap-1.5">
                   {TX_FILTERS.map((f) => (
                     <Tooltip key={f.id}>
                       <TooltipTrigger asChild>
@@ -310,7 +345,7 @@ export function PosSalesView() {
                           type="button"
                           onClick={() => setTxFilter(f.id)}
                           className={cn(
-                            "rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
+                            "rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors sm:px-2.5 sm:py-1 sm:text-[11px]",
                             txFilter === f.id
                               ? "border-teal-600 bg-teal-600 text-white"
                               : "border-border bg-card text-muted-foreground hover:text-foreground",
@@ -332,9 +367,9 @@ export function PosSalesView() {
                   ))}
                 </div>
               </CardHeader>
-              <CardContent className="space-y-2">
+              <CardContent className="space-y-1.5 p-3 pt-0 sm:space-y-2 sm:p-6 sm:pt-0">
                 {filteredOrders.length === 0 ? (
-                  <p className="py-8 text-center text-sm text-muted-foreground">
+                  <p className="py-5 text-center text-xs text-muted-foreground sm:py-8 sm:text-sm">
                     No tickets in this view.
                   </p>
                 ) : (
@@ -347,6 +382,151 @@ export function PosSalesView() {
           </div>
         </>
       )}
+
+      <Dialog open={reportOpen} onOpenChange={setReportOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Download sales report</DialogTitle>
+            <DialogDescription>
+              Choose a from and to date. The PDF includes totals, payment mix, charts, top items, and tickets.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-1">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="pos-sales-from">From</Label>
+                <Input
+                  id="pos-sales-from"
+                  type="date"
+                  value={reportFrom}
+                  max={reportTo || todayLocalIso()}
+                  onChange={(e) => setReportFrom(e.target.value)}
+                  className="h-9 cursor-pointer"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="pos-sales-to">To</Label>
+                <Input
+                  id="pos-sales-to"
+                  type="date"
+                  value={reportTo}
+                  min={reportFrom || undefined}
+                  max={todayLocalIso()}
+                  onChange={(e) => setReportTo(e.target.value)}
+                  className="h-9 cursor-pointer"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <div className="rounded-xl border border-teal-500/20 bg-teal-500/5 px-3 py-2">
+                <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Gross
+                </p>
+                <p className="mt-0.5 truncate text-sm font-bold tabular-nums text-teal-800 dark:text-teal-300">
+                  {reportLoading ? "…" : formatPeso(reportData?.gross ?? 0)}
+                </p>
+              </div>
+              <div className="rounded-xl border border-teal-500/20 bg-teal-500/5 px-3 py-2">
+                <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Net
+                </p>
+                <p className="mt-0.5 truncate text-sm font-bold tabular-nums text-teal-800 dark:text-teal-300">
+                  {reportLoading ? "…" : formatPeso(reportData?.net ?? 0)}
+                </p>
+              </div>
+              <div className="rounded-xl border bg-muted/30 px-3 py-2">
+                <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Paid
+                </p>
+                <p className="mt-0.5 text-lg font-bold tabular-nums">
+                  {reportLoading ? "…" : reportData?.paidCount ?? 0}
+                </p>
+              </div>
+              <div className="rounded-xl border bg-muted/30 px-3 py-2">
+                <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Voids
+                </p>
+                <p className="mt-0.5 text-lg font-bold tabular-nums">
+                  {reportLoading ? "…" : reportData?.voidCount ?? 0}
+                </p>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setReportOpen(false)}
+              disabled={reportBusy}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              className="bg-teal-600 hover:bg-teal-700"
+              disabled={reportBusy || reportLoading || !reportData}
+              onClick={async () => {
+                if (!reportFrom || !reportTo) {
+                  toast({
+                    title: "Choose both dates",
+                    description: "Pick a from and to date for the report.",
+                    variant: "destructive",
+                  });
+                  return;
+                }
+                if (reportFrom > reportTo) {
+                  toast({
+                    title: "Invalid date range",
+                    description: "The from date must be on or before the to date.",
+                    variant: "destructive",
+                  });
+                  return;
+                }
+                if (!reportData) return;
+                setReportBusy(true);
+                try {
+                  const { downloadPosSalesPdf } = await import("@/lib/pos-sales-pdf");
+                  downloadPosSalesPdf({
+                    hotel: {
+                      hotelName: settings?.hotelName || "PalawanSU Hotel",
+                      address: settings?.address,
+                      contactNumber: settings?.contactNumber,
+                      email: settings?.email,
+                    },
+                    from: reportFrom,
+                    to: reportTo,
+                    summary: reportData,
+                  });
+                  toast({
+                    title: "Sales report downloaded",
+                    description:
+                      reportFrom === reportTo
+                        ? `PDF saved for ${formatDayLabel(reportFrom)}.`
+                        : `PDF saved for ${formatDayLabel(reportFrom)} – ${formatDayLabel(reportTo)}.`,
+                  });
+                  setReportOpen(false);
+                } catch (error) {
+                  toast({
+                    title: "Could not create PDF",
+                    description:
+                      error instanceof Error ? error.message : "Please try again.",
+                    variant: "destructive",
+                  });
+                } finally {
+                  setReportBusy(false);
+                }
+              }}
+            >
+              {reportBusy ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4" />
+              )}
+              {reportBusy ? "Preparing…" : "Download PDF"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </PosPageShell>
   );
 }
@@ -365,14 +545,14 @@ function TransactionRow({ order }: { order: PosOrder }) {
       <TooltipTrigger asChild>
         <Link
           href={href}
-          className="flex flex-col gap-2 rounded-xl border border-border/60 px-3 py-2.5 transition-colors hover:border-teal-500/40 hover:bg-teal-500/5 sm:flex-row sm:items-center sm:justify-between"
+          className="flex items-center justify-between gap-2 rounded-lg border border-border/60 px-2.5 py-2 transition-colors hover:border-teal-500/40 hover:bg-teal-500/5 sm:rounded-xl sm:px-3 sm:py-2.5"
         >
           <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="font-medium">{order.orderNumber}</span>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs font-medium sm:text-sm">{order.orderNumber}</span>
               <PosOrderStatusBadge status={order.status} />
             </div>
-            <p className="mt-0.5 text-xs text-muted-foreground">
+            <p className="mt-0.5 truncate text-[10px] text-muted-foreground sm:text-xs">
               {time}
               {payMethod ? ` · ${methodLabel(payMethod)}` : ""}
               {order.tableName ? ` · Table ${order.tableName}` : ""}
@@ -380,7 +560,9 @@ function TransactionRow({ order }: { order: PosOrder }) {
               {order.customerName ? ` · ${order.customerName}` : ""}
             </p>
           </div>
-          <div className="font-semibold tabular-nums">{formatPeso(order.totalAmount)}</div>
+          <div className="shrink-0 text-xs font-semibold tabular-nums sm:text-sm">
+            {formatPeso(order.totalAmount)}
+          </div>
         </Link>
       </TooltipTrigger>
       <TooltipContent>
@@ -396,12 +578,14 @@ function StatCard({
   hint,
   icon: Icon,
   accent,
+  featured = false,
 }: {
   label: string;
   value: string;
   hint: string;
   icon: typeof Banknote;
   accent: "teal" | "sky" | "emerald" | "amber" | "violet" | "rose";
+  featured?: boolean;
 }) {
   const accents = {
     teal: "bg-teal-500/12 text-teal-700 dark:text-teal-300",
@@ -415,18 +599,26 @@ function StatCard({
     <Tooltip>
       <TooltipTrigger asChild>
         <Card className="border-border/70">
-          <CardContent className="flex items-start gap-3 p-4">
+          <CardContent className="flex items-start gap-2 p-2.5 sm:gap-3 sm:p-4">
             <div
               className={cn(
-                "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl",
+                "flex shrink-0 items-center justify-center rounded-lg sm:rounded-xl",
+                "h-7 w-7 sm:h-10 sm:w-10",
                 accents[accent],
               )}
             >
-              <Icon className="h-5 w-5" />
+              <Icon className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
             </div>
             <div className="min-w-0">
-              <p className="text-xs uppercase tracking-wide text-muted-foreground">{label}</p>
-              <p className="mt-0.5 truncate text-2xl font-semibold tracking-tight tabular-nums">
+              <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground sm:text-xs">
+                {label}
+              </p>
+              <p
+                className={cn(
+                  "mt-0.5 truncate font-semibold tracking-tight tabular-nums",
+                  featured ? "text-base sm:text-2xl" : "text-sm sm:text-2xl",
+                )}
+              >
                 {value}
               </p>
             </div>

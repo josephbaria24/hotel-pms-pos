@@ -54,7 +54,7 @@ import {
   DoorOpen, PlusCircle, FileText, Info, CalendarDays,
   CreditCard, Tag, Search, MoreHorizontal, Eye, Pencil, Trash2
 } from "lucide-react";
-import { differenceInDays } from "date-fns";
+import { addDays, differenceInDays, format, parseISO } from "date-fns";
 import { sileo } from "sileo";
 import { formatPhDate, formatPhDateTime, formatPhTime, staysOverlap } from "@/lib/datetime";
 import { ScrollableTablePane } from "@/components/layout/ScrollableTablePane";
@@ -927,6 +927,56 @@ export default function Reservations({ embedded }: ReservationsProps) {
     });
   };
 
+  const bookingSearchParams = useMemo(() => {
+    const raw = search.startsWith("?") ? search.slice(1) : search;
+    return new URLSearchParams(raw);
+  }, [search]);
+
+  const appliedDeepLink = useRef("");
+  useEffect(() => {
+    const raw = bookingSearchParams.toString();
+    const wantsNew = bookingSearchParams.get("new") === "1";
+    const checkIn = bookingSearchParams.get("checkIn");
+    const resId = bookingSearchParams.get("reservation");
+    if (!wantsNew && !resId) {
+      appliedDeepLink.current = raw;
+      return;
+    }
+    if (wantsNew && appliedDeepLink.current !== `new:${raw}`) {
+      appliedDeepLink.current = `new:${raw}`;
+      if (checkIn && /^\d{4}-\d{2}-\d{2}$/.test(checkIn)) {
+        const checkOut = format(addDays(parseISO(checkIn), 1), "yyyy-MM-dd");
+        setForm((prev: any) => ({
+          ...prev,
+          checkInDate: checkIn,
+          checkOutDate: checkOut,
+        }));
+      }
+      setIsCreateOpen(true);
+    }
+    if (resId) {
+      const found = (reservations ?? []).find((r) => r.id === resId);
+      if (found && appliedDeepLink.current !== `res:${resId}`) {
+        appliedDeepLink.current = `res:${resId}`;
+        setViewRes(found);
+      }
+    }
+  }, [bookingSearchParams, reservations]);
+
+  const stripBookingParams = (keys: string[]) => {
+    const p = new URLSearchParams(bookingSearchParams);
+    let changed = false;
+    for (const key of keys) {
+      if (p.has(key)) {
+        p.delete(key);
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    const qs = p.toString();
+    setLocation(qs ? `/guests?${qs}` : "/guests");
+  };
+
   const availableRooms = rooms.filter((room) => room.status === "available");
 
   const blockingReservations = useMemo(
@@ -1280,7 +1330,13 @@ export default function Reservations({ embedded }: ReservationsProps) {
               title="Stay overlaps to"
             />
           </div>
-          <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
+          <Dialog
+            open={isCreateOpen}
+            onOpenChange={(open) => {
+              setIsCreateOpen(open);
+              if (!open) stripBookingParams(["new", "checkIn"]);
+            }}
+          >
             <DialogTrigger asChild>
               <Button className="h-9 rounded-full px-4">
                 <Plus className="w-4 h-4 mr-1.5" />
@@ -1899,7 +1955,15 @@ export default function Reservations({ embedded }: ReservationsProps) {
         </Table>
       </ScrollableTablePane>
 
-      <Dialog open={Boolean(viewRes)} onOpenChange={(o) => !o && setViewRes(null)}>
+      <Dialog
+        open={Boolean(viewRes)}
+        onOpenChange={(o) => {
+          if (!o) {
+            setViewRes(null);
+            stripBookingParams(["reservation"]);
+          }
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Reservation</DialogTitle>

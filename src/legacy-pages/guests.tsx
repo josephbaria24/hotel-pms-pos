@@ -265,7 +265,12 @@ export default function Guests() {
           p.delete("q");
           p.delete("guest");
         }
-        if (next !== "bookings") p.delete("search");
+        if (next !== "bookings") {
+          p.delete("search");
+          p.delete("new");
+          p.delete("checkIn");
+          p.delete("reservation");
+        }
         const qs = p.toString();
         setLocation(qs ? `/guests?${qs}` : "/guests");
       });

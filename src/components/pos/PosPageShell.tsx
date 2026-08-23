@@ -14,11 +14,13 @@ export function PosPageShell({
   title,
   description,
   icon: Icon,
+  action,
   children,
 }: {
   title: string;
   description: string;
   icon: LucideIcon;
+  action?: React.ReactNode;
   children?: React.ReactNode;
 }) {
   return (
@@ -33,10 +35,11 @@ export function PosPageShell({
         >
           <Icon className="h-4 w-4 sm:h-6 sm:w-6" />
         </div>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <h1 className="text-lg font-semibold tracking-tight sm:text-2xl">{title}</h1>
           <p className="hidden text-sm text-muted-foreground sm:block">{description}</p>
         </div>
+        {action ? <div className="shrink-0">{action}</div> : null}
       </div>
       {children ?? (
         <Card className="border-border/70">

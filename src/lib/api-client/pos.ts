@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createClient } from "@/lib/supabase/client";
 import { newId } from "./mappers";
+import { summarizePosOrders, type PosSalesSummary } from "@/lib/pos-sales-stats";
 import type {
   CreatePosCategoryInput,
   CreatePosProductInput,
@@ -21,6 +22,7 @@ import type {
 } from "./pos-types";
 
 export type * from "./pos-types";
+export type { PosSalesSummary };
 
 const qk = {
   categories: ["pos", "categories", "deduped"] as const,
@@ -28,7 +30,7 @@ const qk = {
   tables: ["pos", "tables", "deduped"] as const,
   orders: (filter?: string) => ["pos", "orders", filter ?? "all"] as const,
   order: (id: string) => ["pos", "order", id] as const,
-  sales: (day: string) => ["pos", "sales", day] as const,
+  sales: (range: string) => ["pos", "sales", range] as const,
 };
 
 function mapCategory(row: Record<string, unknown>): PosCategory {
@@ -729,105 +731,55 @@ export function useVoidPosOrder() {
   });
 }
 
-export function usePosSalesSummary(dayIso: string) {
+export async function fetchPosSalesSummary(
+  fromIso: string,
+  toIso = fromIso,
+): Promise<PosSalesSummary> {
+  const supabase = createClient();
+  const startLocal = new Date(`${fromIso}T00:00:00`);
+  const endLocal = new Date(`${toIso}T00:00:00`);
+  endLocal.setDate(endLocal.getDate() + 1);
+  const start = startLocal.toISOString();
+  const end = endLocal.toISOString();
+
+  const [openedRes, closedRes] = await Promise.all([
+    supabase
+      .from("pos_orders")
+      .select(ORDER_SELECT)
+      .gte("opened_at", start)
+      .lt("opened_at", end)
+      .order("opened_at", { ascending: false })
+      .limit(1500),
+    supabase
+      .from("pos_orders")
+      .select(ORDER_SELECT)
+      .gte("closed_at", start)
+      .lt("closed_at", end)
+      .order("closed_at", { ascending: false })
+      .limit(1500),
+  ]);
+  if (openedRes.error) throw openedRes.error;
+  if (closedRes.error) throw closedRes.error;
+
+  const byId = new Map<string, PosOrder>();
+  for (const row of [...(openedRes.data ?? []), ...(closedRes.data ?? [])]) {
+    const order = mapOrder(row as Record<string, unknown>);
+    byId.set(order.id, order);
+  }
+  const orders = [...byId.values()].sort(
+    (a, b) =>
+      new Date(b.closedAt ?? b.openedAt).getTime() -
+      new Date(a.closedAt ?? a.openedAt).getTime(),
+  );
+  return summarizePosOrders(orders, fromIso, toIso);
+}
+
+export function usePosSalesSummary(fromIso: string, toIso?: string, enabled = true) {
+  const to = toIso ?? fromIso;
   return useQuery({
-    queryKey: qk.sales(dayIso),
-    enabled: Boolean(dayIso),
-    queryFn: async () => {
-      const supabase = createClient();
-      const startLocal = new Date(`${dayIso}T00:00:00`);
-      const endLocal = new Date(startLocal);
-      endLocal.setDate(endLocal.getDate() + 1);
-      const start = startLocal.toISOString();
-      const end = endLocal.toISOString();
-
-      const [openedRes, closedRes] = await Promise.all([
-        supabase
-          .from("pos_orders")
-          .select(ORDER_SELECT)
-          .gte("opened_at", start)
-          .lt("opened_at", end)
-          .order("opened_at", { ascending: false })
-          .limit(400),
-        supabase
-          .from("pos_orders")
-          .select(ORDER_SELECT)
-          .gte("closed_at", start)
-          .lt("closed_at", end)
-          .order("closed_at", { ascending: false })
-          .limit(400),
-      ]);
-      if (openedRes.error) throw openedRes.error;
-      if (closedRes.error) throw closedRes.error;
-
-      const byId = new Map<string, PosOrder>();
-      for (const row of [...(openedRes.data ?? []), ...(closedRes.data ?? [])]) {
-        const order = mapOrder(row as Record<string, unknown>);
-        byId.set(order.id, order);
-      }
-      const orders = [...byId.values()].sort(
-        (a, b) =>
-          new Date(b.closedAt ?? b.openedAt).getTime() -
-          new Date(a.closedAt ?? a.openedAt).getTime(),
-      );
-
-      const onThisDay = (iso: string | null | undefined) => {
-        if (!iso) return false;
-        const d = new Date(iso);
-        if (Number.isNaN(d.getTime())) return false;
-        const stamp = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-        return stamp === dayIso;
-      };
-
-      const paid = orders.filter(
-        (o) => o.status === "paid" && onThisDay(o.closedAt ?? o.openedAt),
-      );
-      const voided = orders.filter(
-        (o) => o.status === "void" && onThisDay(o.closedAt ?? o.openedAt),
-      );
-      const openCount = orders.filter((o) => o.status === "open").length;
-      const heldCount = orders.filter((o) => o.status === "held").length;
-
-      const byMethod: Record<string, { amount: number; count: number }> = {};
-      let gross = 0;
-      let net = 0;
-      let tax = 0;
-      let discount = 0;
-      for (const o of paid) {
-        gross += o.totalAmount;
-        net += Math.max(0, o.subtotal - o.discountAmount);
-        tax += o.taxAmount;
-        discount += o.discountAmount;
-        if (o.payments.length === 0) {
-          byMethod.unspecified = byMethod.unspecified ?? { amount: 0, count: 0 };
-          byMethod.unspecified.amount += o.totalAmount;
-          byMethod.unspecified.count += 1;
-        } else {
-          for (const p of o.payments) {
-            const key = p.method || "other";
-            byMethod[key] = byMethod[key] ?? { amount: 0, count: 0 };
-            byMethod[key].amount += p.amount;
-            byMethod[key].count += 1;
-          }
-        }
-      }
-      const voidAmount = voided.reduce((sum, o) => sum + o.totalAmount, 0);
-
-      return {
-        orders,
-        paidCount: paid.length,
-        voidCount: voided.length,
-        openCount,
-        heldCount,
-        gross,
-        net,
-        tax,
-        discount,
-        avgTicket: paid.length ? gross / paid.length : 0,
-        voidAmount,
-        byMethod,
-      };
-    },
+    queryKey: qk.sales(`${fromIso}:${to}`),
+    enabled: Boolean(enabled && fromIso && to),
+    queryFn: () => fetchPosSalesSummary(fromIso, to),
   });
 }
 

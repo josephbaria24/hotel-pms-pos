@@ -1,14 +1,29 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import type { LucideIcon } from "lucide-react";
 import {
+  AlertTriangle,
+  Boxes,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  CircleDot,
+  EyeOff,
+  Flag,
+  FolderOpen,
+  Layers,
+  MinusCircle,
   Package,
+  PackageCheck,
+  PackageX,
   Pencil,
   Plus,
   Search,
+  Tag,
   Trash2,
+  X,
+  Zap,
 } from "lucide-react";
 import { PosPageShell } from "@/components/pos/PosPageShell";
 import { Badge } from "@/components/ui/badge";
@@ -68,6 +83,63 @@ import type { PosProduct } from "@/lib/api-client/pos-types";
 import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 10;
+
+function FilterSelect({
+  icon: Icon,
+  value,
+  onValueChange,
+  placeholder,
+  triggerClassName,
+  children,
+}: {
+  icon: LucideIcon;
+  value: string;
+  onValueChange: (value: string) => void;
+  placeholder: string;
+  triggerClassName?: string;
+  children: ReactNode;
+}) {
+  const active = value !== "all";
+  return (
+    <Select value={value} onValueChange={onValueChange}>
+      <SelectTrigger
+        className={cn(
+          "h-8 min-w-0 gap-1.5 rounded-lg bg-background px-2 text-xs shadow-none sm:h-9 sm:px-3 sm:text-sm",
+          active && "border-teal-500/40 bg-teal-500/5",
+          triggerClassName,
+        )}
+      >
+        <Icon
+          className={cn(
+            "h-3.5 w-3.5 shrink-0",
+            active ? "text-teal-600 dark:text-teal-400" : "text-muted-foreground",
+          )}
+        />
+        <SelectValue placeholder={placeholder} />
+      </SelectTrigger>
+      <SelectContent>{children}</SelectContent>
+    </Select>
+  );
+}
+
+function FilterItem({
+  value,
+  icon: Icon,
+  children,
+}: {
+  value: string;
+  icon: LucideIcon;
+  children: string;
+}) {
+  return (
+    <SelectItem value={value}>
+      <span className="flex min-w-0 items-center gap-2">
+        <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <SelectItemText>{children}</SelectItemText>
+      </span>
+    </SelectItem>
+  );
+}
 
 function pageWindow(current: number, total: number) {
   if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
@@ -317,104 +389,111 @@ export function PosProductsView() {
         </Tooltip>
       </div>
 
-      <div className="flex flex-col gap-2 rounded-2xl border border-border/70 bg-card p-3 sm:flex-row sm:flex-wrap sm:items-center">
-        <div className="relative min-w-[200px] flex-1">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+      <div className="space-y-2 rounded-xl border border-border/70 bg-muted/30 p-2 sm:rounded-2xl sm:bg-card sm:p-3">
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground sm:left-3 sm:h-4 sm:w-4" />
           <Input
-            className="h-9 pl-9"
+            className="h-8 bg-background pl-8 text-xs shadow-none sm:h-9 sm:pl-9 sm:text-sm"
             placeholder="Search name, SKU, or category…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
         </div>
-        <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-          <SelectTrigger className="h-9 w-full sm:w-[170px]">
-            <SelectValue placeholder="Category" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">
-              <SelectItemText>All categories</SelectItemText>
-            </SelectItem>
-            <SelectItem value="none">
-              <SelectItemText>Uncategorized</SelectItemText>
-            </SelectItem>
-            {categoryOptions.map((c) => (
-              <SelectItem key={c.id} value={c.id}>
-                <SelectItemText>{c.name}</SelectItemText>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="h-9 w-full sm:w-[140px]">
-            <SelectValue placeholder="Status" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">
-              <SelectItemText>All statuses</SelectItemText>
-            </SelectItem>
-            <SelectItem value="active">
-              <SelectItemText>Active</SelectItemText>
-            </SelectItem>
-            <SelectItem value="inactive">
-              <SelectItemText>Hidden</SelectItemText>
-            </SelectItem>
-          </SelectContent>
-        </Select>
-        <Select value={flagFilter} onValueChange={setFlagFilter}>
-          <SelectTrigger className="h-9 w-full sm:w-[150px]">
-            <SelectValue placeholder="Flags" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">
-              <SelectItemText>All flags</SelectItemText>
-            </SelectItem>
-            <SelectItem value="quick">
-              <SelectItemText>Quick sell</SelectItemText>
-            </SelectItem>
-            <SelectItem value="standard">
-              <SelectItemText>Standard</SelectItemText>
-            </SelectItem>
-          </SelectContent>
-        </Select>
-        <Select value={stockFilter} onValueChange={setStockFilter}>
-          <SelectTrigger className="h-9 w-full sm:w-[150px]">
-            <SelectValue placeholder="Stock" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">
-              <SelectItemText>All stock</SelectItemText>
-            </SelectItem>
-            <SelectItem value="in">
-              <SelectItemText>In stock</SelectItemText>
-            </SelectItem>
-            <SelectItem value="low">
-              <SelectItemText>Low (1–5)</SelectItemText>
-            </SelectItem>
-            <SelectItem value="out">
-              <SelectItemText>Out of stock</SelectItemText>
-            </SelectItem>
-            <SelectItem value="untracked">
-              <SelectItemText>Not tracked</SelectItemText>
-            </SelectItem>
-          </SelectContent>
-        </Select>
-        {hasFilters ? (
-          <Button
-            type="button"
-            variant="ghost"
-            className="h-9"
-            onClick={() => {
-              setQuery("");
-              setCategoryFilter("all");
-              setStatusFilter("all");
-              setFlagFilter("all");
-              setStockFilter("all");
-            }}
+        <div className="grid grid-cols-2 gap-1.5 sm:flex sm:flex-wrap sm:items-center sm:gap-2">
+          <FilterSelect
+            icon={Layers}
+            value={categoryFilter}
+            onValueChange={setCategoryFilter}
+            placeholder="Category"
+            triggerClassName="sm:w-[170px]"
           >
-            Clear
-          </Button>
-        ) : null}
+            <FilterItem value="all" icon={Layers}>
+              All categories
+            </FilterItem>
+            <FilterItem value="none" icon={FolderOpen}>
+              Uncategorized
+            </FilterItem>
+            {categoryOptions.map((c) => (
+              <FilterItem key={c.id} value={c.id} icon={Tag}>
+                {c.name}
+              </FilterItem>
+            ))}
+          </FilterSelect>
+          <FilterSelect
+            icon={CircleDot}
+            value={statusFilter}
+            onValueChange={setStatusFilter}
+            placeholder="Status"
+            triggerClassName="sm:w-[140px]"
+          >
+            <FilterItem value="all" icon={CircleDot}>
+              All statuses
+            </FilterItem>
+            <FilterItem value="active" icon={CheckCircle2}>
+              Active
+            </FilterItem>
+            <FilterItem value="inactive" icon={EyeOff}>
+              Hidden
+            </FilterItem>
+          </FilterSelect>
+          <FilterSelect
+            icon={Flag}
+            value={flagFilter}
+            onValueChange={setFlagFilter}
+            placeholder="Flags"
+            triggerClassName="sm:w-[150px]"
+          >
+            <FilterItem value="all" icon={Flag}>
+              All flags
+            </FilterItem>
+            <FilterItem value="quick" icon={Zap}>
+              Quick sell
+            </FilterItem>
+            <FilterItem value="standard" icon={Package}>
+              Standard
+            </FilterItem>
+          </FilterSelect>
+          <FilterSelect
+            icon={Boxes}
+            value={stockFilter}
+            onValueChange={setStockFilter}
+            placeholder="Stock"
+            triggerClassName="sm:w-[150px]"
+          >
+            <FilterItem value="all" icon={Boxes}>
+              All stock
+            </FilterItem>
+            <FilterItem value="in" icon={PackageCheck}>
+              In stock
+            </FilterItem>
+            <FilterItem value="low" icon={AlertTriangle}>
+              Low (1–5)
+            </FilterItem>
+            <FilterItem value="out" icon={PackageX}>
+              Out of stock
+            </FilterItem>
+            <FilterItem value="untracked" icon={MinusCircle}>
+              Not tracked
+            </FilterItem>
+          </FilterSelect>
+          {hasFilters ? (
+            <Button
+              type="button"
+              variant="ghost"
+              className="col-span-2 h-8 text-xs text-muted-foreground hover:text-foreground sm:col-auto sm:h-9 sm:w-auto sm:px-3"
+              onClick={() => {
+                setQuery("");
+                setCategoryFilter("all");
+                setStatusFilter("all");
+                setFlagFilter("all");
+                setStockFilter("all");
+              }}
+            >
+              <X className="mr-1 h-3.5 w-3.5" />
+              Clear
+            </Button>
+          ) : null}
+        </div>
       </div>
 
       {isLoading ? (

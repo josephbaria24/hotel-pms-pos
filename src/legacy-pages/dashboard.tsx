@@ -24,6 +24,7 @@ import {
   CalendarRange,
   Ban,
   ChevronDown,
+  ChevronRight,
   Bed,
   Sparkles,
   Check,
@@ -1146,14 +1147,22 @@ export default function Dashboard() {
                     {calendar.map((day) => {
                       const isToday = day.key === todayYmd;
                       const count = day.bookings.length;
-                      return (
-                        <div
-                          key={day.key}
-                          className={cn(
-                            "flex items-center gap-3 rounded-xl border px-3 py-2 transition-colors",
-                            isToday ? "border-primary/40 bg-primary/5" : "bg-card",
-                          )}
-                        >
+                      const rowClass = cn(
+                        "flex w-full items-center gap-3 rounded-xl border px-3 py-2 text-left transition-colors hover:bg-muted/60",
+                        isToday
+                          ? "border-primary/40 bg-primary/5 hover:bg-primary/10"
+                          : "bg-card",
+                      );
+                      const goNewBooking = () =>
+                        setLocation(
+                          `/guests?tab=bookings&new=1&checkIn=${encodeURIComponent(day.key)}`,
+                        );
+                      const goViewBooking = (id: string) =>
+                        setLocation(
+                          `/guests?tab=bookings&reservation=${encodeURIComponent(id)}`,
+                        );
+                      const dayInner = (
+                        <>
                           <div className="w-9 shrink-0 text-center">
                             <div className="text-base font-bold leading-none tabular-nums">
                               {format(day.date, "d")}
@@ -1169,7 +1178,7 @@ export default function Dashboard() {
                               </div>
                             ) : (
                               <div className="text-xs font-medium">
-                                {count} Bookmaker{count === 1 ? "" : "s"}
+                                {count} Booking{count === 1 ? "" : "s"}
                               </div>
                             )}
                           </div>
@@ -1186,9 +1195,72 @@ export default function Dashboard() {
                             ) : null}
                             {count === 0 ? (
                               <Plus className="w-3.5 h-3.5 text-muted-foreground" />
-                            ) : null}
+                            ) : (
+                              <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
+                            )}
                           </div>
-                        </div>
+                        </>
+                      );
+
+                      if (count > 1) {
+                        return (
+                          <Popover key={day.key}>
+                            <PopoverTrigger asChild>
+                              <button
+                                type="button"
+                                className={rowClass}
+                                aria-label={`${count} bookings on ${format(day.date, "MMM d")}. Choose one to view.`}
+                              >
+                                {dayInner}
+                              </button>
+                            </PopoverTrigger>
+                            <PopoverContent align="end" className="w-72 p-2">
+                              <p className="px-2 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                                {format(day.date, "EEE, MMM d")}
+                              </p>
+                              <div className="space-y-1">
+                                {day.bookings.map((b) => (
+                                  <button
+                                    key={b.id}
+                                    type="button"
+                                    onClick={() => goViewBooking(b.id)}
+                                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-muted"
+                                  >
+                                    <GuestAvatar name={b.guestName} size={22} />
+                                    <span className="min-w-0 flex-1">
+                                      <span className="block truncate text-xs font-medium">
+                                        {b.guestName}
+                                      </span>
+                                      <span className="block text-[10px] text-muted-foreground">
+                                        Room {b.roomNumber} · {b.status.replace(/_/g, " ")}
+                                      </span>
+                                    </span>
+                                  </button>
+                                ))}
+                              </div>
+                            </PopoverContent>
+                          </Popover>
+                        );
+                      }
+
+                      return (
+                        <button
+                          key={day.key}
+                          type="button"
+                          className={rowClass}
+                          onClick={() =>
+                            count === 0
+                              ? goNewBooking()
+                              : goViewBooking(day.bookings[0]!.id)
+                          }
+                          aria-label={
+                            count === 0
+                              ? `Create booking for ${format(day.date, "MMM d")}`
+                              : `View booking for ${day.bookings[0]!.guestName}`
+                          }
+                        >
+                          {dayInner}
+                        </button>
                       );
                     })}
                   </div>

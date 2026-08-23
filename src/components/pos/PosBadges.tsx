@@ -29,7 +29,7 @@ export function PosStatusPill({
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide",
+        "inline-flex items-center rounded border px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide sm:rounded-md sm:px-2 sm:py-0.5 sm:text-[11px]",
         className,
       )}
     >

@@ -733,7 +733,7 @@ export function PosRegisterView() {
               </div>
             )}
           </div>
-          <DialogFooter>
+          <DialogFooter className="flex-row justify-end gap-2 space-x-0 sm:space-x-0">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button variant="outline" onClick={() => setChargeOpen(false)}>

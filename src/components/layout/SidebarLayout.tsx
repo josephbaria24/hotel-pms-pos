@@ -535,7 +535,7 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
           <SheetContent
             side="left"
             className={cn(
-              "w-[min(100vw-2.5rem,300px)] border-sidebar-border bg-sidebar p-0 text-sidebar-foreground [&>button]:text-sidebar-foreground [&>button]:hover:bg-sidebar-accent",
+              "w-[min(95vw,300px)] overflow-hidden rounded-xl border-sidebar-border bg-sidebar p-0 text-sidebar-foreground [&>button]:text-sidebar-foreground [&>button]:hover:bg-sidebar-accent",
               isPos && "sidebar-pos",
             )}
           >
