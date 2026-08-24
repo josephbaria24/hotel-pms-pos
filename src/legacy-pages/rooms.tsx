@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent, type MouseEvent, type PointerEvent } from "react";
 import { useLocation, useSearch } from "wouter";
 import {
   useCreateRoom,
@@ -933,6 +933,12 @@ export default function Rooms() {
     return Boolean(target?.closest("[data-option-action]"));
   };
 
+  const keepSelectOpenOnField = {
+    onPointerDown: (event: PointerEvent) => event.stopPropagation(),
+    onMouseDown: (event: MouseEvent) => event.stopPropagation(),
+    onKeyDownCapture: (event: KeyboardEvent) => event.stopPropagation(),
+  };
+
   const viewingRoom = useMemo(
     () => safeRooms.find((r) => r.id === viewingRoomId) ?? null,
     [safeRooms, viewingRoomId],
@@ -1095,8 +1101,7 @@ export default function Rooms() {
                       ))}
                       <div
                         className="sticky bottom-0 z-10 mt-1 border-t bg-popover p-2"
-                        onPointerDown={(e) => e.preventDefault()}
-                        onKeyDown={(e) => e.stopPropagation()}
+                        {...keepSelectOpenOnField}
                       >
                         <p className="mb-1.5 text-[11px] font-medium text-muted-foreground">Add new type</p>
                         <div className="flex items-center gap-1.5">
@@ -1105,6 +1110,7 @@ export default function Rooms() {
                             onChange={(e) => setNewTypeOption(e.target.value)}
                             placeholder="e.g. suite"
                             className="h-8 text-xs"
+                            {...keepSelectOpenOnField}
                             onKeyDown={(e) => {
                               e.stopPropagation();
                               if (e.key === "Enter") {
@@ -1226,8 +1232,7 @@ export default function Rooms() {
                       ))}
                       <div
                         className="sticky bottom-0 z-10 mt-1 space-y-2 border-t bg-popover p-2"
-                        onPointerDown={(e) => e.preventDefault()}
-                        onKeyDown={(e) => e.stopPropagation()}
+                        {...keepSelectOpenOnField}
                       >
                         <p className="text-[11px] font-medium text-muted-foreground">Add new status</p>
                         <div className="flex items-center gap-1.5">
@@ -1236,6 +1241,7 @@ export default function Rooms() {
                             onChange={(e) => setNewStatusOption(e.target.value)}
                             placeholder="e.g. renovation"
                             className="h-8 text-xs"
+                            {...keepSelectOpenOnField}
                             onKeyDown={(e) => {
                               e.stopPropagation();
                               if (e.key === "Enter") {

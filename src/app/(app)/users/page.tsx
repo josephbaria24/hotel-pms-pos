@@ -1,3 +1,7 @@
-"use client";
+import { redirect } from "next/navigation";
 
-export { default } from "@/legacy-pages/users";
+export const dynamic = "force-dynamic";
+
+export default function UsersRedirect() {
+  redirect("/staff");
+}

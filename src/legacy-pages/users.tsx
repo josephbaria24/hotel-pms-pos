@@ -1,5 +1,9 @@
+"use client";
+
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
+import { useAuth } from "@/components/auth/AuthProvider";
 import { 
   useListUsers, 
   useCreateUser, 
@@ -37,7 +41,10 @@ interface User {
 }
 
 export default function Users() {
-  const { data: users, isLoading } = useListUsers();
+  const router = useRouter();
+  const { user: currentUser, isLoading: authLoading } = useAuth();
+  const isAdmin = currentUser?.role === "admin";
+  const { data: users, isLoading, isError, error, refetch } = useListUsers();
   const createUserMutation = useCreateUser();
   const updateUserMutation = useUpdateUser();
   const deleteUserMutation = useDeleteUser();
@@ -188,6 +195,20 @@ export default function Users() {
     }
   };
 
+  if (!authLoading && !isAdmin) {
+    return (
+      <div className="space-y-3">
+        <h1 className="text-2xl font-semibold tracking-tight">Staff users</h1>
+        <p className="text-sm text-muted-foreground">
+          You need an admin account to manage staff logins.
+        </p>
+        <Button variant="outline" onClick={() => router.push("/dashboard")}>
+          Back to dashboard
+        </Button>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
@@ -243,6 +264,20 @@ export default function Users() {
                   </TableCell>
                 </TableRow>
               ))
+            ) : isError ? (
+              <TableRow>
+                <TableCell colSpan={7} className="py-8 text-center text-sm text-destructive">
+                  Could not load staff users.{" "}
+                  {error instanceof Error ? error.message : "Please try again."}{" "}
+                  <button
+                    type="button"
+                    className="underline"
+                    onClick={() => void refetch()}
+                  >
+                    Retry
+                  </button>
+                </TableCell>
+              </TableRow>
             ) : !users?.length ? (
               <TableRow>
                 <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
@@ -253,11 +288,12 @@ export default function Users() {
               users.map((user: User) => {
                 const active = user.isActive !== false;
                 const isPasswordVisible = !!visiblePasswords[user.id];
+                const initials = (user.fullName || user.username || "?").slice(0, 2);
                 return (
                   <TableRow key={user.id} className="hover:bg-muted/30 transition-colors">
                     <TableCell className="font-semibold text-foreground flex items-center gap-2 py-3">
                       <div className="h-8 w-8 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold text-xs uppercase">
-                        {user.fullName.substring(0, 2)}
+                        {initials}
                       </div>
                       {user.fullName}
                     </TableCell>

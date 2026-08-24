@@ -59,6 +59,7 @@ function Router() {
             <Route path="/checkin" component={RedirectCheckinToGuests} />
             <Route path="/billing" component={Billing} />
             <Route path="/reports" component={Reports} />
+            <Route path="/staff" component={Users} />
             <Route path="/users" component={Users} />
             <Route path="/settings" component={Settings} />
             <Route path="/" component={Dashboard} />

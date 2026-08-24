@@ -234,6 +234,7 @@ function SidebarPanel({
             <Link
               key={item.href}
               href={item.href}
+              prefetch={false}
               data-tour={item.tourId}
               onClick={() => onNavigate?.()}
             >
@@ -363,7 +364,7 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
               },
               {
                 name: "Users",
-                href: "/users",
+                href: "/staff",
                 icon: UsersIcon,
                 tourId: "nav-users",
               },
@@ -553,8 +554,8 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
         </Sheet>
 
         <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-none border-0 bg-background sm:rounded-2xl sm:border sm:border-border/70 lg:ml-3">
-          <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain p-3 sm:p-4 md:p-5 lg:p-6">
-            <div className="mx-auto h-full w-full min-w-0 max-w-7xl xl:mx-0 xl:max-w-none">
+          <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain p-3 pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:p-4 sm:pb-6 md:p-5 md:pb-8 lg:p-6 lg:pb-8">
+            <div className="mx-auto min-h-full w-full min-w-0 max-w-7xl xl:mx-0 xl:max-w-none">
               {children}
             </div>
           </div>

@@ -1313,11 +1313,15 @@ export function useListUsers() {
       if (error) throw error;
 
       const emailById = new Map<string, string | null>();
-      const { data: classroom } = await supabase.rpc("admin_classroom_overview");
-      if (Array.isArray(classroom)) {
-        for (const row of classroom as Record<string, unknown>[]) {
-          emailById.set(String(row.id), (row.email as string | null) ?? null);
+      try {
+        const { data: classroom } = await supabase.rpc("admin_classroom_overview");
+        if (Array.isArray(classroom)) {
+          for (const row of classroom as Record<string, unknown>[]) {
+            emailById.set(String(row.id), (row.email as string | null) ?? null);
+          }
         }
+      } catch {
+        // Emails are optional; listing profiles still succeeds.
       }
 
       return (data ?? []).map((r) =>
