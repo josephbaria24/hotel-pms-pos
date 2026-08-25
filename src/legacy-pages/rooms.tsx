@@ -104,7 +104,8 @@ import {
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
-import { formatPhDate } from "@/lib/datetime";
+import { formatPhDate, todayYmdPh } from "@/lib/datetime";
+import { isReservedHold, roomNumberKey } from "@/lib/occupancy-stats";
 import { differenceInCalendarDays, format, parseISO } from "date-fns";
 
 type RoomStatus = "available" | "occupied" | "cleaning" | "maintenance" | string;
@@ -624,21 +625,23 @@ export default function Rooms() {
   const reservationsByRoomNumber = useMemo(() => {
     const map = new Map<string, Reservation[]>();
     for (const r of reservations) {
-      if (!map.has(r.roomNumber)) map.set(r.roomNumber, []);
-      map.get(r.roomNumber)!.push(r);
+      const key = roomNumberKey(r.roomNumber);
+      if (!key) continue;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(r);
     }
     return map;
   }, [reservations]);
 
-  const todayYmd = format(new Date(), "yyyy-MM-dd");
+  const todayYmd = todayYmdPh();
 
   function reservationsForRoom(room: Room) {
-    const list = reservationsByRoomNumber.get(room.roomNumber) ?? [];
+    const list = reservationsByRoomNumber.get(roomNumberKey(room.roomNumber)) ?? [];
     const current = list.find(
       (r) => r.status === "checked_in" && r.checkInDate.slice(0, 10) <= todayYmd && r.checkOutDate.slice(0, 10) >= todayYmd,
     );
     const upcoming = list
-      .filter((r) => r.status === "reserved" && r.checkInDate.slice(0, 10) >= todayYmd)
+      .filter((r) => isReservedHold(r.status, r.checkOutDate, todayYmd))
       .sort((a, b) => a.checkInDate.localeCompare(b.checkInDate));
     const past = list.filter((r) => r.status === "checked_out");
     return { all: list, current, upcoming, past };

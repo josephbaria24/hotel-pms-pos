@@ -3,7 +3,6 @@ import { useLocation } from "wouter";
 import {
   useGetDashboardSummary,
   useGetRecentActivity,
-  useGetOccupancyOverview,
   useListReservations,
   useListRooms,
   useListPayments,
@@ -63,7 +62,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import { formatPhDate, formatPhTime } from "@/lib/datetime";
+import { formatPhDate, formatPhTime, todayYmdPh } from "@/lib/datetime";
+import { computeOccupancyCounts } from "@/lib/occupancy-stats";
 import { format, isSameMonth, parseISO, subMonths, startOfMonth } from "date-fns";
 import { useAuth } from "@/components/auth/AuthProvider";
 
@@ -205,9 +205,8 @@ export default function Dashboard() {
   const firstName = (user?.fullName ?? user?.username ?? "there").split(/\s+/)[0]!;
 
   const { data: summary, isLoading: isSummaryLoading } = useGetDashboardSummary();
-  const { data: occupancy, isLoading: isOccupancyLoading } = useGetOccupancyOverview();
   const { data: reservations = [], isLoading: isResLoading } = useListReservations();
-  const { data: rooms = [] } = useListRooms();
+  const { data: rooms = [], isLoading: isRoomsLoading } = useListRooms();
   const { data: payments = [] } = useListPayments();
   const { data: revenue, isLoading: isRevenueLoading } = useGetRevenueReport();
   const { data: activity, isLoading: isActivityLoading } = useGetRecentActivity();
@@ -221,9 +220,10 @@ export default function Dashboard() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
 
-  const todayYmd = format(new Date(), "yyyy-MM-dd");
+  const todayYmd = todayYmdPh();
   const todayCheckIns = summary?.todayCheckIns ?? 0;
   const todayCheckOuts = summary?.todayCheckOuts ?? 0;
+  const isOccupancyLoading = isRoomsLoading || isResLoading;
 
   /* ───────── derived sets ───────── */
 
@@ -245,48 +245,30 @@ export default function Dashboard() {
   const upcomingCount = upcomingReservations.length;
 
   const rentedDirty = useMemo(
-    () => (occupancy?.rooms ?? []).filter((r) => r.status === "occupied").length,
-    [occupancy],
+    () => rooms.filter((r) => r.status === "occupied").length,
+    [rooms],
   );
   const vacantDirty = useMemo(
     () =>
-      (occupancy?.rooms ?? []).filter(
+      rooms.filter(
         (r) => r.status === "cleaning" || r.status === "maintenance",
       ).length,
-    [occupancy],
+    [rooms],
   );
 
   /* ───────── occupancy donut (Vacant / Occupied / Reserved) ───────── */
 
   const donutData = useMemo(() => {
-    const ovr = occupancy?.rooms ?? [];
-    const total = summary?.totalRooms ?? ovr.length ?? rooms.length ?? 0;
-
-    const occupied = ovr.filter((r) => r.status === "occupied").length;
-
-    // "Reserved" = distinct rooms that have an upcoming reservation but aren't currently occupied
-    const occupiedRoomNumbers = new Set(
-      ovr.filter((r) => r.status === "occupied").map((r) => r.roomNumber),
-    );
-    const reservedRoomNumbers = new Set<string>();
-    for (const r of upcomingReservations) {
-      if (!occupiedRoomNumbers.has(r.roomNumber)) reservedRoomNumbers.add(r.roomNumber);
-    }
-    const reserved = reservedRoomNumbers.size;
-    const vacant = Math.max(0, total - occupied - reserved);
-
+    const counts = computeOccupancyCounts(rooms, reservations, todayYmd);
     return {
-      total,
-      occupied,
-      vacant,
-      reserved,
+      ...counts,
       pieData: [
-        { name: "Vacant", value: vacant, fill: "#86efac" },
-        { name: "Occupied", value: occupied, fill: "#a78bfa" },
-        { name: "Reserved", value: reserved, fill: "#67e8f9" },
+        { name: "Vacant", value: counts.vacant, fill: "#86efac" },
+        { name: "Occupied", value: counts.occupied, fill: "#a78bfa" },
+        { name: "Reserved", value: counts.reserved, fill: "#67e8f9" },
       ],
     };
-  }, [occupancy, summary, rooms, upcomingReservations]);
+  }, [rooms, reservations, todayYmd]);
 
   /* ───────── monthly bookings (filtered period) ───────── */
 
@@ -624,7 +606,7 @@ export default function Dashboard() {
                   )}
                   <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
                     <div className="text-lg font-bold tabular-nums leading-none">
-                      {(summary?.occupancyRate ?? 0).toFixed(1)}%
+                      {donutData.occupancyRate.toFixed(1)}%
                     </div>
                     <div className="text-[9px] text-muted-foreground uppercase tracking-wider mt-0.5">
                       Occupancy

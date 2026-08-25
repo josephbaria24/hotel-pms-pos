@@ -7,6 +7,8 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import { createClient } from "@/lib/supabase/client";
+import { todayYmdPh } from "@/lib/datetime";
+import { computeOccupancyCounts } from "@/lib/occupancy-stats";
 import {
   mapActivity,
   mapGuest,
@@ -659,6 +661,7 @@ export function useCreateReservation() {
       qc.invalidateQueries({ queryKey: qk.reservations });
       qc.invalidateQueries({ queryKey: qk.guests });
       qc.invalidateQueries({ queryKey: qk.activity });
+      qc.invalidateQueries({ queryKey: qk.dashboardSummary });
     },
   });
 }
@@ -691,6 +694,7 @@ export function useUpdateReservation() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: qk.reservations });
       qc.invalidateQueries({ queryKey: qk.rooms });
+      qc.invalidateQueries({ queryKey: qk.dashboardSummary });
     },
   });
 }
@@ -730,6 +734,7 @@ export function useCancelReservation() {
       qc.invalidateQueries({ queryKey: qk.reservations });
       qc.invalidateQueries({ queryKey: qk.rooms });
       qc.invalidateQueries({ queryKey: qk.activity });
+      qc.invalidateQueries({ queryKey: qk.dashboardSummary });
     },
   });
 }
@@ -757,6 +762,7 @@ export function useDeleteReservation() {
       qc.invalidateQueries({ queryKey: qk.reservations });
       qc.invalidateQueries({ queryKey: qk.rooms });
       qc.invalidateQueries({ queryKey: qk.activity });
+      qc.invalidateQueries({ queryKey: qk.dashboardSummary });
     },
   });
 }
@@ -1086,16 +1092,52 @@ export function useGetDashboardSummary() {
     queryKey: qk.dashboardSummary,
     queryFn: async () => {
       const supabase = createClient();
-      const today = new Date().toISOString().slice(0, 10);
+      const today = todayYmdPh();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      const userId = user?.id;
       const [{ data: rooms }, { data: reservations }] = await Promise.all([
-        supabase.from("rooms").select("id, status"),
+        supabase.from("rooms").select("id, room_number, status, tenant_id"),
         supabase
           .from("reservations")
-          .select("check_in_date, check_out_date, status"),
+          .select("room_id, check_in_date, check_out_date, status, rooms ( room_number )"),
       ]);
-      const totalRooms = rooms?.length ?? 0;
-      const occupied =
-        rooms?.filter((r) => r.status === "occupied").length ?? 0;
+      const rows = [...(rooms ?? [])].sort((a, b) => {
+        const aOwn =
+          String((a as { tenant_id?: string }).tenant_id ?? "") === userId ? 0 : 1;
+        const bOwn =
+          String((b as { tenant_id?: string }).tenant_id ?? "") === userId ? 0 : 1;
+        return aOwn - bOwn;
+      });
+      const seen = new Set<string>();
+      const uniqueRooms: { id: string; roomNumber: string; status: string }[] = [];
+      for (const row of rows) {
+        const num = String((row as { room_number?: string }).room_number ?? "")
+          .trim()
+          .toLowerCase();
+        if (!num || seen.has(num)) continue;
+        seen.add(num);
+        uniqueRooms.push({
+          id: String((row as { id?: string }).id ?? ""),
+          roomNumber: String((row as { room_number?: string }).room_number ?? ""),
+          status: String((row as { status?: string }).status ?? ""),
+        });
+      }
+      const occupancy = computeOccupancyCounts(
+        uniqueRooms,
+        (reservations ?? []).map((r) => {
+          const room = (r as { rooms?: { room_number?: string } | null }).rooms;
+          return {
+            roomId: String((r as { room_id?: string }).room_id ?? ""),
+            roomNumber: room?.room_number ?? "",
+            status: String(r.status ?? ""),
+            checkInDate: String(r.check_in_date ?? ""),
+            checkOutDate: String(r.check_out_date ?? ""),
+          };
+        }),
+        today,
+      );
       const todayCheckIns =
         reservations?.filter(
           (r) =>
@@ -1111,8 +1153,8 @@ export function useGetDashboardSummary() {
       return {
         todayCheckIns,
         todayCheckOuts,
-        totalRooms,
-        occupancyRate: totalRooms ? Math.round((occupied / totalRooms) * 100) : 0,
+        totalRooms: occupancy.total,
+        occupancyRate: occupancy.occupancyRate,
       };
     },
   });
