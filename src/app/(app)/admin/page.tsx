@@ -18,6 +18,14 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectItemText,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -31,6 +39,8 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import {
+  ArrowDown,
+  ArrowUp,
   Building2,
   CheckCircle2,
   GraduationCap,
@@ -40,7 +50,19 @@ import {
   Search,
   Shield,
   Trash2,
+  X,
 } from "lucide-react";
+
+function hasPracticeActivity(s: ClassroomUser) {
+  return s.reservationsCount > 0 || s.paymentsCount > 0 || s.posOrdersCount > 0;
+}
+
+type StatusFilter = "all" | "active" | "inactive";
+type RoleFilter = "all" | "admin" | "staff";
+type TourFilter = "all" | "done" | "pending";
+type ActivityFilter = "all" | "with" | "none";
+type SortKey = "name" | "role" | "status" | "tour" | "activity";
+type SortDir = "asc" | "desc";
 
 function ProgressCell({ label, value }: { label: string; value: number }) {
   return (
@@ -169,6 +191,12 @@ export default function AdminClassroomPage() {
     useOperationMode();
   const setOperationMode = useSetOperationMode();
   const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [roleFilter, setRoleFilter] = useState<RoleFilter>("all");
+  const [tourFilter, setTourFilter] = useState<TourFilter>("all");
+  const [activityFilter, setActivityFilter] = useState<ActivityFilter>("all");
+  const [sortKey, setSortKey] = useState<SortKey>("name");
+  const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const isAdmin = user?.role === "admin";
@@ -182,12 +210,64 @@ export default function AdminClassroomPage() {
   const students = useMemo(() => {
     const list = data ?? [];
     const q = query.trim().toLowerCase();
-    if (!q) return list;
-    return list.filter((s) => {
-      const hay = `${s.fullName} ${s.username} ${s.email ?? ""}`.toLowerCase();
+    const next = list.filter((s) => {
+      if (statusFilter === "active" && !s.isActive) return false;
+      if (statusFilter === "inactive" && s.isActive) return false;
+      if (roleFilter !== "all" && s.role !== roleFilter) return false;
+      if (tourFilter === "done" && !s.onboardingCompleted) return false;
+      if (tourFilter === "pending" && s.onboardingCompleted) return false;
+      if (activityFilter === "with" && !hasPracticeActivity(s)) return false;
+      if (activityFilter === "none" && hasPracticeActivity(s)) return false;
+      if (!q) return true;
+      const hay = `${s.fullName} ${s.username} ${s.email ?? ""} ${s.role}`.toLowerCase();
       return hay.includes(q);
     });
-  }, [data, query]);
+    next.sort((a, b) => {
+      let cmp = 0;
+      switch (sortKey) {
+        case "role":
+          cmp = (a.role || "").localeCompare(b.role || "", undefined, { sensitivity: "base" });
+          break;
+        case "status":
+          cmp = Number(b.isActive) - Number(a.isActive);
+          break;
+        case "tour":
+          cmp = Number(b.onboardingCompleted) - Number(a.onboardingCompleted);
+          break;
+        case "activity":
+          cmp =
+            Number(hasPracticeActivity(b)) - Number(hasPracticeActivity(a)) ||
+            (b.reservationsCount + b.paymentsCount + b.posOrdersCount) -
+              (a.reservationsCount + a.paymentsCount + a.posOrdersCount);
+          break;
+        case "name":
+        default:
+          cmp = (a.fullName || a.username || "").localeCompare(
+            b.fullName || b.username || "",
+            undefined,
+            { sensitivity: "base" },
+          );
+      }
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+    return next;
+  }, [data, query, statusFilter, roleFilter, tourFilter, activityFilter, sortKey, sortDir]);
+
+  const filtersActive =
+    query.trim() !== "" ||
+    statusFilter !== "all" ||
+    roleFilter !== "all" ||
+    tourFilter !== "all" ||
+    activityFilter !== "all";
+
+  function handleSort(nextKey: SortKey) {
+    if (sortKey === nextKey) {
+      setSortDir((dir) => (dir === "asc" ? "desc" : "asc"));
+      return;
+    }
+    setSortKey(nextKey);
+    setSortDir("asc");
+  }
 
   const selectableIds = useMemo(
     () => students.filter((s) => s.id !== user?.id).map((s) => s.id),
@@ -360,25 +440,98 @@ export default function AdminClassroomPage() {
             Deactivated users cannot log in.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="relative min-w-[12rem] flex-1 sm:max-w-xs">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search name, email…"
-              className="pl-8"
-            />
+        <div className="flex flex-col gap-2 sm:items-end">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative min-w-[12rem] flex-1 sm:max-w-xs">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search name, email…"
+                className="pl-8"
+              />
+            </div>
+            <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as StatusFilter)}>
+              <SelectTrigger className="h-9 w-[140px]">
+                <SelectValue placeholder="Status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all"><SelectItemText>All statuses</SelectItemText></SelectItem>
+                <SelectItem value="active"><SelectItemText>Active</SelectItemText></SelectItem>
+                <SelectItem value="inactive"><SelectItemText>Inactive</SelectItemText></SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={roleFilter} onValueChange={(v) => setRoleFilter(v as RoleFilter)}>
+              <SelectTrigger className="h-9 w-[130px]">
+                <SelectValue placeholder="Role" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all"><SelectItemText>All roles</SelectItemText></SelectItem>
+                <SelectItem value="admin"><SelectItemText>Admin</SelectItemText></SelectItem>
+                <SelectItem value="staff"><SelectItemText>Staff</SelectItemText></SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={tourFilter} onValueChange={(v) => setTourFilter(v as TourFilter)}>
+              <SelectTrigger className="h-9 w-[140px]">
+                <SelectValue placeholder="Tour" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all"><SelectItemText>All tours</SelectItemText></SelectItem>
+                <SelectItem value="done"><SelectItemText>Tour done</SelectItemText></SelectItem>
+                <SelectItem value="pending"><SelectItemText>Tour pending</SelectItemText></SelectItem>
+              </SelectContent>
+            </Select>
+            <Select
+              value={`${sortKey}:${sortDir}`}
+              onValueChange={(v) => {
+                const [key, dir] = v.split(":") as [SortKey, SortDir];
+                setSortKey(key);
+                setSortDir(dir);
+              }}
+            >
+              <SelectTrigger className="h-9 w-[160px]">
+                <SelectValue placeholder="Sort" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="name:asc"><SelectItemText>Name A–Z</SelectItemText></SelectItem>
+                <SelectItem value="name:desc"><SelectItemText>Name Z–A</SelectItemText></SelectItem>
+                <SelectItem value="status:asc"><SelectItemText>Active first</SelectItemText></SelectItem>
+                <SelectItem value="status:desc"><SelectItemText>Inactive first</SelectItemText></SelectItem>
+                <SelectItem value="tour:asc"><SelectItemText>Tour done first</SelectItemText></SelectItem>
+                <SelectItem value="activity:asc"><SelectItemText>Most activity</SelectItemText></SelectItem>
+              </SelectContent>
+            </Select>
+            {filtersActive ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-9"
+                onClick={() => {
+                  setQuery("");
+                  setStatusFilter("all");
+                  setRoleFilter("all");
+                  setTourFilter("all");
+                  setActivityFilter("all");
+                }}
+              >
+                <X className="h-3.5 w-3.5" />
+                Clear
+              </Button>
+            ) : null}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void refetch()}
+              disabled={isFetching}
+            >
+              <RefreshCw className={cn("h-3.5 w-3.5", isFetching && "animate-spin")} />
+              Refresh
+            </Button>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => void refetch()}
-            disabled={isFetching}
-          >
-            <RefreshCw className={cn("h-3.5 w-3.5", isFetching && "animate-spin")} />
-            Refresh
-          </Button>
+          <p className="text-xs text-muted-foreground tabular-nums">
+            {isLoading ? "Loading…" : `Showing ${students.length} of ${totals.users}`}
+          </p>
         </div>
       </div>
 
@@ -436,15 +589,54 @@ export default function AdminClassroomPage() {
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {[
-          { label: "Students", value: totals.users },
-          { label: "Active", value: totals.active },
-          { label: "Tour pending", value: totals.onboardingPending },
-          { label: "With activity", value: totals.withActivity },
-        ].map((card) => (
-          <div
+        {(
+          [
+            {
+              label: "Students",
+              value: totals.users,
+              active:
+                statusFilter === "all" &&
+                tourFilter === "all" &&
+                activityFilter === "all",
+              onClick: () => {
+                setStatusFilter("all");
+                setTourFilter("all");
+                setActivityFilter("all");
+              },
+            },
+            {
+              label: "Active",
+              value: totals.active,
+              active: statusFilter === "active",
+              onClick: () =>
+                setStatusFilter((prev) => (prev === "active" ? "all" : "active")),
+            },
+            {
+              label: "Tour pending",
+              value: totals.onboardingPending,
+              active: tourFilter === "pending",
+              onClick: () =>
+                setTourFilter((prev) => (prev === "pending" ? "all" : "pending")),
+            },
+            {
+              label: "With activity",
+              value: totals.withActivity,
+              active: activityFilter === "with",
+              onClick: () =>
+                setActivityFilter((prev) => (prev === "with" ? "all" : "with")),
+            },
+          ] as const
+        ).map((card) => (
+          <button
             key={card.label}
-            className="rounded-xl border border-border/80 bg-card px-4 py-3"
+            type="button"
+            onClick={card.onClick}
+            className={cn(
+              "rounded-xl border bg-card px-4 py-3 text-left transition-colors",
+              card.active
+                ? "border-primary/60 ring-1 ring-primary/30"
+                : "border-border/80 hover:border-border",
+            )}
           >
             <p className="text-xs uppercase tracking-wide text-muted-foreground">
               {card.label}
@@ -452,7 +644,7 @@ export default function AdminClassroomPage() {
             <p className="mt-1 text-2xl font-semibold tabular-nums">
               {isLoading ? "—" : card.value}
             </p>
-          </div>
+          </button>
         ))}
       </div>
 
@@ -534,11 +726,66 @@ export default function AdminClassroomPage() {
                     disabled={selectableIds.length === 0}
                   />
                 </TableHead>
-                <TableHead>Student</TableHead>
-                <TableHead>Role</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Tour</TableHead>
-                <TableHead>Progress</TableHead>
+                <TableHead>
+                  <button
+                    type="button"
+                    onClick={() => handleSort("name")}
+                    className="inline-flex items-center gap-1 hover:text-foreground"
+                  >
+                    Student
+                    {sortKey === "name" ? (
+                      sortDir === "asc" ? <ArrowUp className="h-3.5 w-3.5" /> : <ArrowDown className="h-3.5 w-3.5" />
+                    ) : null}
+                  </button>
+                </TableHead>
+                <TableHead>
+                  <button
+                    type="button"
+                    onClick={() => handleSort("role")}
+                    className="inline-flex items-center gap-1 hover:text-foreground"
+                  >
+                    Role
+                    {sortKey === "role" ? (
+                      sortDir === "asc" ? <ArrowUp className="h-3.5 w-3.5" /> : <ArrowDown className="h-3.5 w-3.5" />
+                    ) : null}
+                  </button>
+                </TableHead>
+                <TableHead>
+                  <button
+                    type="button"
+                    onClick={() => handleSort("status")}
+                    className="inline-flex items-center gap-1 hover:text-foreground"
+                  >
+                    Status
+                    {sortKey === "status" ? (
+                      sortDir === "asc" ? <ArrowUp className="h-3.5 w-3.5" /> : <ArrowDown className="h-3.5 w-3.5" />
+                    ) : null}
+                  </button>
+                </TableHead>
+                <TableHead>
+                  <button
+                    type="button"
+                    onClick={() => handleSort("tour")}
+                    className="inline-flex items-center gap-1 hover:text-foreground"
+                  >
+                    Tour
+                    {sortKey === "tour" ? (
+                      sortDir === "asc" ? <ArrowUp className="h-3.5 w-3.5" /> : <ArrowDown className="h-3.5 w-3.5" />
+                    ) : null}
+                  </button>
+                </TableHead>
+                <TableHead>
+                  <button
+                    type="button"
+                    onClick={() => handleSort("activity")}
+                    className="inline-flex items-center gap-1 hover:text-foreground"
+                  >
+                    Progress
+                    {sortKey === "activity" ? (
+                      sortDir === "asc" ? <ArrowUp className="h-3.5 w-3.5" /> : <ArrowDown className="h-3.5 w-3.5" />
+                    ) : null}
+                  </button>
+                </TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -549,7 +796,7 @@ export default function AdminClassroomPage() {
                     colSpan={7}
                     className="py-10 text-center text-muted-foreground"
                   >
-                    No students found.
+                    No students match this search or filter.
                   </TableCell>
                 </TableRow>
               ) : (

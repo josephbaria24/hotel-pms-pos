@@ -1408,6 +1408,45 @@ export function useCreateUser() {
   });
 }
 
+export function useBulkCreateUsers() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      paste: string;
+      samePassword: boolean;
+      password: string;
+      role: string;
+      isActive: boolean;
+    }) => {
+      const res = await fetch("/api/admin/users/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      const body = (await res.json().catch(() => null)) as {
+        error?: string;
+        created?: number;
+        failed?: number;
+        users?: { id: string; email: string }[];
+        failures?: { email: string; message: string }[];
+      } | null;
+      if (!res.ok) {
+        throw new Error(body?.error || "Could not create users.");
+      }
+      return {
+        created: body?.created ?? 0,
+        failed: body?.failed ?? 0,
+        users: body?.users ?? [],
+        failures: body?.failures ?? [],
+      };
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.users });
+      qc.invalidateQueries({ queryKey: qk.classroom });
+    },
+  });
+}
+
 export function useUpdateUser() {
   const qc = useQueryClient();
   return useMutation({

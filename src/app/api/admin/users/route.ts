@@ -1,20 +1,11 @@
 import { NextResponse } from "next/server";
+import { createStaffUser } from "@/lib/admin-create-user";
+import { EMAIL_RE, usernameFromEmail } from "@/lib/bulk-users";
 import {
   getServiceClient,
   missingServiceKeyResponse,
   requireAdmin,
 } from "@/lib/supabase/admin-api";
-
-function usernameFromEmail(email: string) {
-  return email
-    .split("@")[0]
-    .replace(/[^a-zA-Z0-9._-]/g, "")
-    .slice(0, 40);
-}
-
-function isValidEmail(email: string) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-}
 
 export async function POST(request: Request) {
   const auth = await requireAdmin();
@@ -43,7 +34,7 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
-  if (!isValidEmail(email)) {
+  if (!EMAIL_RE.test(email)) {
     return NextResponse.json({ error: "Enter a valid email address." }, { status: 400 });
   }
   if (password.length < 6) {
@@ -56,36 +47,19 @@ export async function POST(request: Request) {
   const service = getServiceClient();
   if (!service) return missingServiceKeyResponse();
 
-  const { data, error } = await service.auth.admin.createUser({
+  const created = await createStaffUser(service, {
     email,
     password,
-    email_confirm: true,
-    user_metadata: { full_name: fullName, username, role },
-  });
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 400 });
-  }
-  if (!data.user) {
-    return NextResponse.json({ error: "Could not create user." }, { status: 500 });
-  }
-
-  const { error: profileError } = await service.from("profiles").upsert({
-    id: data.user.id,
-    tenant_id: data.user.id,
-    full_name: fullName,
+    fullName,
     username,
     role,
-    is_active: isActive,
-    login_password: password,
-    updated_at: new Date().toISOString(),
+    isActive,
   });
-  if (profileError) {
-    return NextResponse.json({ error: profileError.message }, { status: 400 });
+  if ("error" in created) {
+    return NextResponse.json({ error: created.error }, { status: 400 });
   }
 
-  await service.rpc("seed_tenant_defaults", { p_tenant: data.user.id });
-
-  return NextResponse.json({ id: data.user.id, email });
+  return NextResponse.json(created);
 }
 
 export async function PATCH(request: Request) {
@@ -118,7 +92,7 @@ export async function PATCH(request: Request) {
     body?.role === "admin" ? "admin" : body?.role === "staff" ? "staff" : undefined;
   const isActive = body?.isActive;
 
-  if (email && !isValidEmail(email)) {
+  if (email && !EMAIL_RE.test(email)) {
     return NextResponse.json({ error: "Enter a valid email address." }, { status: 400 });
   }
   if (password && password.length < 6) {
