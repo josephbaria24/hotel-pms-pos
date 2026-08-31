@@ -9,6 +9,7 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import { todayYmdPh } from "@/lib/datetime";
 import { computeOccupancyCounts } from "@/lib/occupancy-stats";
+import { money, validateReservationPayment } from "@/lib/reservation-payment";
 import {
   mapActivity,
   mapGuest,
@@ -633,6 +634,14 @@ export function useCreateReservation() {
         );
       }
 
+      const totalAmount = money(Number(payload.totalAmount) || 0);
+      const paidAmount = money(Number(payload.paidAmount) || 0);
+      const payError = validateReservationPayment(totalAmount, paidAmount);
+      if (payError) throw new Error(payError);
+      if (paidAmount > 0 && !String(payload.paymentMethod ?? "").trim()) {
+        throw new Error("Select a mode of payment for the amount paid.");
+      }
+
       const { error } = await supabase.from("reservations").insert({
         id,
         reservation_number: reservationNumber,
@@ -644,11 +653,28 @@ export function useCreateReservation() {
         children: payload.children,
         status: "reserved",
         source: "walk_in",
-        total_amount: payload.totalAmount,
-        paid_amount: 0,
+        total_amount: totalAmount,
+        paid_amount: paidAmount,
         notes: payload.notes ?? null,
       });
       if (error) throw error;
+
+      if (paidAmount > 0) {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        const { error: payErr } = await supabase.from("payments").insert({
+          id: newId(),
+          reservation_id: id,
+          amount: paidAmount,
+          method: String(payload.paymentMethod ?? "cash").trim() || "cash",
+          reference_no: payload.paymentReference?.trim() || null,
+          note: "Reservation deposit",
+          received_by: user?.id ?? null,
+        });
+        if (payErr) throw payErr;
+      }
+
       await logActivity(
         "Reservation created",
         "reservation",
@@ -660,6 +686,7 @@ export function useCreateReservation() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: qk.reservations });
       qc.invalidateQueries({ queryKey: qk.guests });
+      qc.invalidateQueries({ queryKey: qk.payments });
       qc.invalidateQueries({ queryKey: qk.activity });
       qc.invalidateQueries({ queryKey: qk.dashboardSummary });
     },
@@ -898,6 +925,18 @@ export function useGetReservationContractData() {
       const g = res.guests as Record<string, unknown>;
       const room = res.rooms as Record<string, unknown>;
       const s = settings ? mapSettings(settings as Record<string, unknown>) : null;
+      const { data: pays } = await supabase
+        .from("payments")
+        .select("method, amount, created_at")
+        .eq("reservation_id", input.id)
+        .order("created_at", { ascending: false });
+      const methods = [
+        ...new Set(
+          (pays ?? [])
+            .map((p) => String(p.method ?? "").trim())
+            .filter(Boolean),
+        ),
+      ];
       return {
         hotelName: s?.hotelName ?? "PalawanSU Hotel",
         hotelAddress: s?.address ?? "",
@@ -921,6 +960,7 @@ export function useGetReservationContractData() {
         children: res.children,
         totalAmount: Number(res.total_amount ?? 0),
         paidAmount: Number(res.paid_amount ?? 0),
+        paymentMethod: methods.join(", ") || null,
         notes: res.notes,
       };
     },

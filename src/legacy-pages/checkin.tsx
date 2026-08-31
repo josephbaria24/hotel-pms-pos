@@ -84,6 +84,7 @@ import { formatPhDate, formatPhDateTime, formatPhTime } from "@/lib/datetime";
 import { ScrollableTablePane } from "@/components/layout/ScrollableTablePane";
 import { cn } from "@/lib/utils";
 import { countStaySummary } from "@/lib/stays-summary-stats";
+import { contractPaymentSectionHtml, peso, reservationPaymentSummary } from "@/lib/reservation-payment";
 
 /* ───────── UI Helpers matching Dashboard style ───────── */
 
@@ -1355,6 +1356,12 @@ export default function CheckInOut({ embedded }: CheckInOutProps) {
             </div>
           </div>
 
+          ${contractPaymentSectionHtml({
+            totalAmount: Number(data.totalAmount) || 0,
+            paidAmount: Number(data.paidAmount) || 0,
+            paymentMethod: data.paymentMethod,
+          })}
+
           <div class="section">
             <div class="section-title">Consent & Undertaking</div>
             <div class="box">
@@ -2408,6 +2415,27 @@ export default function CheckInOut({ embedded }: CheckInOutProps) {
                     <div className="flex gap-2"><span className="font-semibold">Check-out:</span> <span>{consentForm.checkOutDate}</span></div>
                   </div>
                 </div>
+
+                {(() => {
+                  const pay = reservationPaymentSummary(
+                    Number(consentForm.totalAmount) || 0,
+                    Number(consentForm.paidAmount) || 0,
+                    consentForm.paymentMethod,
+                  );
+                  return (
+                    <div className="space-y-2">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground border-b pb-1">Payment Details</div>
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                        <div className="flex gap-2"><span className="font-semibold">Total:</span> <span>{peso(pay.total)}</span></div>
+                        <div className="flex gap-2"><span className="font-semibold">Required deposit (50%):</span> <span>{peso(pay.deposit)}</span></div>
+                        <div className="flex gap-2"><span className="font-semibold">Amount paid:</span> <span>{peso(pay.paid)}</span></div>
+                        <div className="flex gap-2"><span className="font-semibold">Remaining balance:</span> <span>{peso(pay.balance)}</span></div>
+                        <div className="flex gap-2"><span className="font-semibold">Mode of payment:</span> <span>{pay.method}</span></div>
+                        <div className="flex gap-2"><span className="font-semibold">Payment status:</span> <span>{pay.status}</span></div>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 <div className="space-y-2">
                   <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground border-b pb-1">Consent</div>

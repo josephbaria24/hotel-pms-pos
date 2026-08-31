@@ -60,6 +60,17 @@ export function todayYmdPh(): string {
   }).format(new Date());
 }
 
+export function ymdPh(value: DateInput): string {
+  const date = toDate(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: PH_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
 /** Hotel stays are [check-in, check-out): checkout day is free for the next guest. */
 export function staysOverlap(
   aIn: string,

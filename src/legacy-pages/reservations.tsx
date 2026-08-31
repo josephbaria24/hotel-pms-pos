@@ -13,6 +13,7 @@ import {
   useGetReservationBillData,
   useListRooms,
   useListGuests,
+  useListPayments,
   getListReservationsQueryKey,
   type CreateReservationPayload,
   type Reservation,
@@ -52,11 +53,11 @@ import {
   Plus, XCircle, Loader2, CircleX, CalendarPlus, Ban,
   User, Users, Baby, Mail, Phone, MapPin, Wallet, 
   DoorOpen, PlusCircle, FileText, Info, CalendarDays,
-  CreditCard, Tag, Search, MoreHorizontal, Eye, Pencil, Trash2
+  CreditCard, Tag, Search, MoreHorizontal, Eye, Pencil, Trash2, FileSpreadsheet
 } from "lucide-react";
 import { addDays, differenceInDays, format, parseISO } from "date-fns";
 import { sileo } from "sileo";
-import { formatPhDate, formatPhDateTime, formatPhTime, staysOverlap } from "@/lib/datetime";
+import { formatPhDate, formatPhDateTime, formatPhTime, staysOverlap, todayYmdPh, ymdPh } from "@/lib/datetime";
 import { ScrollableTablePane } from "@/components/layout/ScrollableTablePane";
 import {
   DropdownMenu,
@@ -65,6 +66,20 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import {
+  buildReservationExcelRows,
+  downloadReservationsExcel,
+  latestPaymentMethod,
+} from "@/lib/reservation-excel";
+import {
+  RESERVATION_PAYMENT_METHODS,
+  contractPaymentSectionHtml,
+  peso,
+  remainingBalance,
+  requiredDeposit,
+  reservationPaymentSummary,
+  validateReservationPayment,
+} from "@/lib/reservation-payment";
 
 type ReservationsProps = {
   /** When true, hide the large page title (used inside Guests hub). */
@@ -76,6 +91,7 @@ export default function Reservations({ embedded }: ReservationsProps) {
   const { data: reservations, isLoading } = useListReservations();
   const { data: rooms = [] } = useListRooms();
   const { data: guests = [] } = useListGuests();
+  const { data: payments = [] } = useListPayments();
   const createReservationMutation = useCreateReservation();
   const cancelReservationMutation = useCancelReservation();
   const updateReservationMutation = useUpdateReservation();
@@ -681,6 +697,11 @@ export default function Reservations({ embedded }: ReservationsProps) {
               </div>
             </div>
           </div>
+          ${contractPaymentSectionHtml({
+            totalAmount: Number(data.totalAmount) || 0,
+            paidAmount: Number(data.paidAmount) || 0,
+            paymentMethod: data.paymentMethod,
+          })}
           <div class="section">
             <div class="section-title">Consent & Undertaking</div>
             <div class="box">
@@ -829,6 +850,9 @@ export default function Reservations({ embedded }: ReservationsProps) {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [madeOn, setMadeOn] = useState("");
+  const [exporting, setExporting] = useState(false);
+  const [paidTouched, setPaidTouched] = useState(false);
   const [viewRes, setViewRes] = useState<Reservation | null>(null);
   const [editRes, setEditRes] = useState<Reservation | null>(null);
   const [editResForm, setEditResForm] = useState({ checkInDate: "", checkOutDate: "", notes: "" });
@@ -873,6 +897,8 @@ export default function Reservations({ embedded }: ReservationsProps) {
     additionalFee: "",
     additionalFeeLabel: "",
     notes: "",
+    amountPaid: "",
+    paymentMethod: "cash",
   });
 
   useEffect(() => {
@@ -900,12 +926,15 @@ export default function Reservations({ embedded }: ReservationsProps) {
       const extraFee = Number(form.additionalFee) || 0;
       const total = roomTotal + extraFee;
 
-      setForm((prev: any) => ({
-        ...prev,
-        totalAmount: total.toString(),
-      }));
+      setForm((prev: any) => {
+        const next = { ...prev, totalAmount: total.toString() };
+        if (!paidTouched) {
+          next.amountPaid = requiredDeposit(total).toFixed(2);
+        }
+        return next;
+      });
     }
-  }, [form.roomId, form.checkInDate, form.checkOutDate, form.additionalFee, rooms]);
+  }, [form.roomId, form.checkInDate, form.checkOutDate, form.additionalFee, rooms, paidTouched]);
 
   const resetForm = () => {
     setForm({
@@ -924,7 +953,10 @@ export default function Reservations({ embedded }: ReservationsProps) {
       additionalFee: "",
       additionalFeeLabel: "",
       notes: "",
+      amountPaid: "",
+      paymentMethod: "cash",
     });
+    setPaidTouched(false);
   };
 
   const bookingSearchParams = useMemo(() => {
@@ -1096,16 +1128,40 @@ export default function Reservations({ embedded }: ReservationsProps) {
       return;
     }
 
+    const totalAmount = Number(form.totalAmount) || 0;
+    const paidAmount = Number(form.amountPaid);
+    const payError = validateReservationPayment(totalAmount, paidAmount);
+    if (payError) {
+      sileo.error({
+        title: "Payment amount invalid",
+        description: payError,
+        icon: <Wallet className="w-4 h-4" />,
+      });
+      return;
+    }
+    if (paidAmount > 0 && !String(form.paymentMethod ?? "").trim()) {
+      sileo.error({
+        title: "Mode of payment required",
+        description: "Select how the deposit or payment was received.",
+        icon: <CreditCard className="w-4 h-4" />,
+      });
+      return;
+    }
+
     const finalNotes = [
       form.notes,
       form.additionalFeeLabel ? `Additional Fee: ₱${form.additionalFee} (${form.additionalFeeLabel})` : ""
     ].filter(Boolean).join("\n");
 
-    const payload: any = {
-      ...form,
+    const payload: CreateReservationPayload = {
+      roomId: form.roomId,
+      checkInDate: form.checkInDate,
+      checkOutDate: form.checkOutDate,
       adults: Number(form.adults) || 1,
       children: Number(form.children) || 0,
-      totalAmount: Number(form.totalAmount) || 0,
+      totalAmount,
+      paidAmount,
+      paymentMethod: paidAmount > 0 ? form.paymentMethod : undefined,
       notes: finalNotes,
       guestId: useExistingGuest ? form.guestId : undefined,
       firstName: useExistingGuest ? undefined : form.firstName,
@@ -1114,6 +1170,8 @@ export default function Reservations({ embedded }: ReservationsProps) {
       email: useExistingGuest ? undefined : form.email,
       address: useExistingGuest ? undefined : form.address,
     };
+
+    const paySummary = reservationPaymentSummary(totalAmount, paidAmount, form.paymentMethod);
 
     await sileo.promise(
       createReservationMutation.mutateAsync(payload).then(async (result) => {
@@ -1130,7 +1188,9 @@ export default function Reservations({ embedded }: ReservationsProps) {
         },
         success: {
           title: "Reservation created",
-          description: "Booking is now ready for arrival.",
+          description: paySummary.depositMet || paySummary.paid <= 0
+            ? `Booking is now ready for arrival. Payment status: ${paySummary.status}.`
+            : `Booking saved. Payment is below the 50% deposit (${paySummary.status}).`,
           icon: <CalendarPlus className="h-4 w-4" />,
         },
         error: (error) => ({
@@ -1247,6 +1307,7 @@ export default function Reservations({ embedded }: ReservationsProps) {
       if (statusFilter !== "all" && res.status !== statusFilter) return false;
       if (dateFrom && res.checkOutDate.slice(0, 10) < dateFrom) return false;
       if (dateTo && res.checkInDate.slice(0, 10) > dateTo) return false;
+      if (madeOn && ymdPh(res.createdAt ?? "") !== madeOn) return false;
       if (!s) return true;
       return (
         res.reservationNumber.toLowerCase().includes(s) ||
@@ -1254,82 +1315,50 @@ export default function Reservations({ embedded }: ReservationsProps) {
         res.roomNumber.toLowerCase().includes(s)
       );
     });
-  }, [reservations, searchTerm, statusFilter, dateFrom, dateTo]);
+  }, [reservations, searchTerm, statusFilter, dateFrom, dateTo, madeOn]);
+
+  const exportReservations = async () => {
+    if (filteredReservations.length === 0) {
+      sileo.error({
+        title: "Nothing to export",
+        description: "No reservations match the current filters.",
+        icon: <FileSpreadsheet className="w-4 h-4" />,
+      });
+      return;
+    }
+    setExporting(true);
+    try {
+      const rows = buildReservationExcelRows(filteredReservations, guests, rooms, payments);
+      const datePart = madeOn || todayYmdPh();
+      await downloadReservationsExcel(rows, `Reservations_${datePart}.xlsx`);
+      toast.success(`Exported ${rows.length} reservation${rows.length === 1 ? "" : "s"}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to export Excel file");
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const createPay = reservationPaymentSummary(
+    Number(form.totalAmount) || 0,
+    Number(form.amountPaid) || 0,
+    form.paymentMethod,
+  );
 
   return (
-    <div className={embedded ? "space-y-4" : "space-y-6"}>
-      <header
-        className={
-          embedded
-            ? "flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between"
-            : "flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"
-        }
-      >
-        {!embedded ? (
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">Reservations</h1>
-            <p className="text-muted-foreground">Manage all hotel reservations.</p>
-          </div>
-        ) : (
-          <div className="min-w-0">
-            <h2 className="text-lg font-semibold tracking-tight">Bookings</h2>
-            <p className="text-sm text-muted-foreground">Search, create, or cancel reservations.</p>
-          </div>
-        )}
-        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-          <div className="relative min-w-[180px] max-w-full sm:w-[240px] flex-1">
-            <Input
-              placeholder="Search reservations..."
-              value={searchTerm}
-              onChange={(e) => {
-                setSearchTerm(e.target.value);
-              }}
-              className="h-9 w-full rounded-full bg-card pl-9"
-            />
-            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-          </div>
-          <Select value={statusFilter} onValueChange={setStatusFilter}>
-            <SelectTrigger className="h-9 w-[150px] rounded-full bg-card">
-              <SelectValue placeholder="Status" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">
-                <SelectItemText>All statuses</SelectItemText>
-              </SelectItem>
-              <SelectItem value="reserved">
-                <SelectItemText>Reserved</SelectItemText>
-              </SelectItem>
-              <SelectItem value="checked_in">
-                <SelectItemText>Checked in</SelectItemText>
-              </SelectItem>
-              <SelectItem value="checked_out">
-                <SelectItemText>Checked out</SelectItemText>
-              </SelectItem>
-              <SelectItem value="cancelled">
-                <SelectItemText>Cancelled</SelectItemText>
-              </SelectItem>
-              <SelectItem value="no_show">
-                <SelectItemText>No show</SelectItemText>
-              </SelectItem>
-            </SelectContent>
-          </Select>
-          <div className="flex flex-wrap items-center gap-1.5">
-            <Input
-              type="date"
-              className="h-9 w-[140px] rounded-md bg-card"
-              value={dateFrom}
-              onChange={(e) => setDateFrom(e.target.value)}
-              title="Stay overlaps from"
-            />
-            <span className="text-xs text-muted-foreground shrink-0">–</span>
-            <Input
-              type="date"
-              className="h-9 w-[140px] rounded-md bg-card"
-              value={dateTo}
-              onChange={(e) => setDateTo(e.target.value)}
-              title="Stay overlaps to"
-            />
-          </div>
+    <div className={embedded ? "space-y-3" : "space-y-6"}>
+      <header className="flex min-w-0 flex-col gap-1.5">
+        <div className="flex min-w-0 items-center justify-between gap-2">
+          {!embedded ? (
+            <div className="min-w-0">
+              <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Reservations</h1>
+              <p className="hidden text-sm text-muted-foreground sm:block">Manage all hotel reservations.</p>
+            </div>
+          ) : (
+            <div className="min-w-0">
+              <h2 className="text-base font-semibold tracking-tight">Bookings</h2>
+            </div>
+          )}
           <Dialog
             open={isCreateOpen}
             onOpenChange={(open) => {
@@ -1338,9 +1367,10 @@ export default function Reservations({ embedded }: ReservationsProps) {
             }}
           >
             <DialogTrigger asChild>
-              <Button className="h-9 rounded-full px-4">
-                <Plus className="w-4 h-4 mr-1.5" />
-                New Reservation
+              <Button size="sm" className="h-8 shrink-0 rounded-full px-2.5 sm:px-3">
+                <Plus className="w-3.5 h-3.5 sm:mr-1" />
+                <span className="sm:hidden">New</span>
+                <span className="hidden sm:inline">New Reservation</span>
               </Button>
             </DialogTrigger>
           <DialogContent className="flex max-h-[85vh] max-w-3xl flex-col gap-4 overflow-hidden p-6 sm:max-h-[85dvh]">
@@ -1558,9 +1588,72 @@ export default function Reservations({ embedded }: ReservationsProps) {
                         </div>
                       </div>
                       <div className="text-3xl font-black text-primary tracking-tight">
-                        ₱{Number(form.totalAmount || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                        {peso(Number(form.totalAmount) || 0)}
                       </div>
                     </div>
+                  </div>
+
+                  <div className="md:col-span-2 space-y-3 rounded-lg border border-primary/20 bg-muted/20 p-4">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-black">Payment</p>
+                      <Badge variant={createPay.status === "Fully Paid" ? "default" : "secondary"}>
+                        {createPay.status}
+                      </Badge>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="space-y-1">
+                        <p className="text-xs text-muted-foreground">Required deposit (50%)</p>
+                        <p className="font-semibold">{peso(createPay.deposit)}</p>
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-xs text-muted-foreground">Remaining balance</p>
+                        <p className="font-semibold">{peso(createPay.balance)}</p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label className="flex items-center gap-2 text-xs uppercase tracking-wider font-bold">
+                          <Wallet className="w-3.5 h-3.5" />
+                          Amount paid
+                        </Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          step="0.01"
+                          value={form.amountPaid}
+                          onChange={(e) => {
+                            setPaidTouched(true);
+                            setForm((prev: any) => ({ ...prev, amountPaid: e.target.value }));
+                          }}
+                          placeholder={createPay.deposit.toFixed(2)}
+                          className="bg-background"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label className="flex items-center gap-2 text-xs uppercase tracking-wider font-bold">
+                          <CreditCard className="w-3.5 h-3.5" />
+                          Mode of payment
+                        </Label>
+                        <Select
+                          value={form.paymentMethod || "cash"}
+                          onValueChange={(value) => setForm((prev: any) => ({ ...prev, paymentMethod: value }))}
+                        >
+                          <SelectTrigger className="bg-background">
+                            <SelectValue placeholder="Select method" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {RESERVATION_PAYMENT_METHODS.map((method) => (
+                              <SelectItem key={method.value} value={method.value}>
+                                <SelectItemText>{method.label}</SelectItemText>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                    {createPay.paid > 0 && createPay.paid < createPay.deposit ? (
+                      <p className="text-xs text-amber-700 dark:text-amber-400">
+                        Amount paid is below the 50% deposit. You can still save this booking; payment status will be Deposit Required.
+                      </p>
+                    ) : null}
                   </div>
                 </div>
               </TabsContent>
@@ -1825,6 +1918,99 @@ export default function Reservations({ embedded }: ReservationsProps) {
           </DialogContent>
           </Dialog>
         </div>
+
+        <div className="grid w-full min-w-0 grid-cols-2 gap-1.5 sm:flex sm:flex-wrap sm:items-end">
+          <div className="relative col-span-2 min-w-0 sm:min-w-[11rem] sm:max-w-xs sm:flex-1">
+            <Input
+              placeholder="Search bookings..."
+              value={searchTerm}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+              }}
+              className="h-8 w-full rounded-full bg-card pl-8 text-sm"
+            />
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          </div>
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger className="h-8 w-full min-w-0 rounded-full bg-card text-xs sm:w-[8.75rem]">
+              <SelectValue placeholder="Status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">
+                <SelectItemText>All statuses</SelectItemText>
+              </SelectItem>
+              <SelectItem value="reserved">
+                <SelectItemText>Reserved</SelectItemText>
+              </SelectItem>
+              <SelectItem value="checked_in">
+                <SelectItemText>Checked in</SelectItemText>
+              </SelectItem>
+              <SelectItem value="checked_out">
+                <SelectItemText>Checked out</SelectItemText>
+              </SelectItem>
+              <SelectItem value="cancelled">
+                <SelectItemText>Cancelled</SelectItemText>
+              </SelectItem>
+              <SelectItem value="no_show">
+                <SelectItemText>No show</SelectItemText>
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8 w-full min-w-0 rounded-full px-2 text-xs sm:w-auto sm:px-3"
+            onClick={exportReservations}
+            disabled={exporting || isLoading}
+            title="Export currently listed reservations to Excel"
+          >
+            {exporting ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin sm:mr-1" />
+            ) : (
+              <FileSpreadsheet className="h-3.5 w-3.5 sm:mr-1" />
+            )}
+            <span className="truncate">Export</span>
+          </Button>
+          <div className="col-span-2 grid min-w-0 grid-cols-2 gap-1.5 sm:contents">
+          <label className="col-span-2 min-w-0 sm:col-span-1 sm:w-[9.5rem]">
+            <span className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              Made on
+            </span>
+            <Input
+              type="date"
+              className="h-8 w-full min-w-0 max-w-full bg-card px-1.5 text-[12px] tabular-nums [&::-webkit-calendar-picker-indicator]:m-0 [&::-webkit-datetime-edit]:min-w-0"
+              value={madeOn}
+              onChange={(e) => setMadeOn(e.target.value)}
+              title="Reservations created on this date"
+            />
+          </label>
+          <label className="min-w-0 sm:w-[9.5rem]">
+            <span className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              Stay from
+            </span>
+            <Input
+              type="date"
+              className="h-8 w-full min-w-0 max-w-full bg-card px-1.5 text-[12px] tabular-nums [&::-webkit-calendar-picker-indicator]:m-0 [&::-webkit-datetime-edit]:min-w-0"
+              value={dateFrom}
+              onChange={(e) => setDateFrom(e.target.value)}
+              title="Stay overlaps from"
+            />
+          </label>
+          <label className="min-w-0 sm:w-[9.5rem]">
+            <span className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              Stay to
+            </span>
+            <Input
+              type="date"
+              className="h-8 w-full min-w-0 max-w-full bg-card px-1.5 text-[12px] tabular-nums [&::-webkit-calendar-picker-indicator]:m-0 [&::-webkit-datetime-edit]:min-w-0"
+              value={dateTo}
+              onChange={(e) => setDateTo(e.target.value)}
+              title="Stay overlaps to"
+            />
+          </label>
+          </div>
+        </div>
       </header>
 
       <ScrollableTablePane offsetRem={12.5} minVh={30}>
@@ -1858,7 +2044,7 @@ export default function Reservations({ embedded }: ReservationsProps) {
             ) : filteredReservations.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
-                  {searchTerm || statusFilter !== "all" || dateFrom || dateTo
+                  {searchTerm || statusFilter !== "all" || dateFrom || dateTo || madeOn
                     ? "No reservations match your filters."
                     : "No reservations found."}
                 </TableCell>
@@ -2002,11 +2188,27 @@ export default function Reservations({ embedded }: ReservationsProps) {
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <p className="text-muted-foreground text-xs">Total</p>
-                  <p>₱{viewRes.totalAmount.toFixed(2)}</p>
+                  <p>{peso(viewRes.totalAmount)}</p>
                 </div>
                 <div>
-                  <p className="text-muted-foreground text-xs">Balance</p>
-                  <p>₱{viewRes.balance.toFixed(2)}</p>
+                  <p className="text-muted-foreground text-xs">Required deposit (50%)</p>
+                  <p>{peso(requiredDeposit(viewRes.totalAmount))}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs">Amount paid</p>
+                  <p>{peso(viewRes.paidAmount)}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs">Remaining balance</p>
+                  <p>{peso(remainingBalance(viewRes.totalAmount, viewRes.paidAmount))}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs">Mode of payment</p>
+                  <p>{latestPaymentMethod(viewRes.id, payments) || "—"}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs">Payment status</p>
+                  <p>{reservationPaymentSummary(viewRes.totalAmount, viewRes.paidAmount).status}</p>
                 </div>
               </div>
               {viewRes.notes ? (
@@ -2260,6 +2462,27 @@ export default function Reservations({ embedded }: ReservationsProps) {
                     <div className="flex gap-2"><span className="font-semibold">Check-out:</span> <span>{consentForm.checkOutDate}</span></div>
                   </div>
                 </div>
+
+                {(() => {
+                  const pay = reservationPaymentSummary(
+                    Number(consentForm.totalAmount) || 0,
+                    Number(consentForm.paidAmount) || 0,
+                    consentForm.paymentMethod,
+                  );
+                  return (
+                    <div className="space-y-2">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground border-b pb-1">Payment Details</div>
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                        <div className="flex gap-2"><span className="font-semibold">Total:</span> <span>{peso(pay.total)}</span></div>
+                        <div className="flex gap-2"><span className="font-semibold">Required deposit (50%):</span> <span>{peso(pay.deposit)}</span></div>
+                        <div className="flex gap-2"><span className="font-semibold">Amount paid:</span> <span>{peso(pay.paid)}</span></div>
+                        <div className="flex gap-2"><span className="font-semibold">Remaining balance:</span> <span>{peso(pay.balance)}</span></div>
+                        <div className="flex gap-2"><span className="font-semibold">Mode of payment:</span> <span>{pay.method}</span></div>
+                        <div className="flex gap-2"><span className="font-semibold">Payment status:</span> <span>{pay.status}</span></div>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 <div className="space-y-2">
                   <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground border-b pb-1">Consent</div>

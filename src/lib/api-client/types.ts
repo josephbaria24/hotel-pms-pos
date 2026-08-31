@@ -157,5 +157,8 @@ export type CreateReservationPayload = {
   adults: number;
   children: number;
   totalAmount: number;
+  paidAmount?: number;
+  paymentMethod?: string;
+  paymentReference?: string;
   notes?: string | null;
 };

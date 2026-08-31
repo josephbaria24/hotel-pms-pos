@@ -16,6 +16,13 @@ const nextConfig: NextConfig = {
       ),
       wouter: path.resolve(__dirname, "src/lib/wouter-shim.tsx"),
     };
+    config.resolve.fallback = {
+      ...config.resolve.fallback,
+      fs: false,
+      path: false,
+      crypto: false,
+      stream: false,
+    };
     return config;
   },
   turbopack: {
