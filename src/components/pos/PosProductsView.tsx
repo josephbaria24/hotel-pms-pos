@@ -80,6 +80,7 @@ import {
   useUpdatePosProduct,
 } from "@/lib/api-client/pos";
 import type { PosProduct } from "@/lib/api-client/pos-types";
+import { inventoryStatus } from "@/lib/pos-inventory";
 import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 10;
@@ -220,11 +221,9 @@ export function PosProductsView() {
       if (flagFilter === "quick" && !p.isQuickSell) return false;
       if (flagFilter === "standard" && p.isQuickSell) return false;
       if (stockFilter === "untracked" && p.trackStock) return false;
-      if (stockFilter === "in" && (!p.trackStock || p.stockQty <= 0)) return false;
-      if (stockFilter === "low" && (!p.trackStock || p.stockQty <= 0 || p.stockQty > 5)) {
-        return false;
-      }
-      if (stockFilter === "out" && (!p.trackStock || p.stockQty > 0)) return false;
+      if (stockFilter === "in" && inventoryStatus(p) !== "in_stock") return false;
+      if (stockFilter === "low" && inventoryStatus(p) !== "low") return false;
+      if (stockFilter === "out" && inventoryStatus(p) !== "out") return false;
       return true;
     });
   }, [products, query, categoryFilter, statusFilter, flagFilter, stockFilter]);
@@ -521,8 +520,9 @@ export function PosProductsView() {
             </TableHeader>
             <TableBody>
               {paged.map((p) => {
-                const low = p.trackStock && p.stockQty > 0 && p.stockQty <= 5;
-                const out = p.trackStock && p.stockQty <= 0;
+                const status = inventoryStatus(p);
+                const low = status === "low";
+                const out = status === "out";
                 return (
                   <TableRow key={p.id} className={cn(!p.isActive && "bg-muted/30")}>
                     <TableCell>

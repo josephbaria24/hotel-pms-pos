@@ -16,6 +16,7 @@ import {
   ShoppingCart,
   Sun,
   Tags,
+  Warehouse,
 } from "lucide-react";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { cn } from "@/lib/utils";
@@ -131,6 +132,7 @@ const posNavigation: NavItem[] = [
   { name: "Register", href: "/pos", icon: ShoppingCart, tourId: "nav-pos-register" },
   { name: "Orders", href: "/pos/orders", icon: ClipboardList, tourId: "nav-pos-orders" },
   { name: "Products", href: "/pos/products", icon: Package, tourId: "nav-pos-products" },
+  { name: "Inventory", href: "/pos/inventory", icon: Warehouse, tourId: "nav-pos-inventory" },
   { name: "Categories", href: "/pos/categories", icon: Tags, tourId: "nav-pos-categories" },
   { name: "Sales", href: "/pos/sales", icon: Receipt, tourId: "nav-pos-sales" },
   { name: "Floor plan", href: "/pos/tables", icon: LayoutGrid, tourId: "nav-pos-tables" },

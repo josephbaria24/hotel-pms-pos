@@ -20,6 +20,7 @@ export type PosProduct = {
   cost: number;
   trackStock: boolean;
   stockQty: number;
+  reorderPoint: number;
   unit: string;
   isActive: boolean;
   isQuickSell: boolean;
@@ -146,6 +147,7 @@ export type CreatePosProductInput = {
   cost?: number;
   trackStock?: boolean;
   stockQty?: number;
+  reorderPoint?: number;
   unit?: string;
   isActive?: boolean;
   isQuickSell?: boolean;
@@ -192,4 +194,39 @@ export type SavePosOrderInput = {
     referenceNo?: string | null;
     note?: string | null;
   } | null;
+};
+
+export type PosStockMovementType =
+  | "receive"
+  | "adjust"
+  | "count"
+  | "sale"
+  | "void_sale"
+  | "waste";
+
+export type PosStockMovement = {
+  id: string;
+  productId: string;
+  productName: string;
+  sku: string | null;
+  type: PosStockMovementType;
+  quantity: number;
+  qtyBefore: number;
+  qtyAfter: number;
+  reason: string | null;
+  referenceNo: string | null;
+  note: string | null;
+  createdBy: string | null;
+  createdAt: string;
+};
+
+export type AdjustPosStockInput = {
+  productId: string;
+  type: Exclude<PosStockMovementType, "sale" | "void_sale">;
+  quantity: number;
+  countedQty?: number;
+  reason?: string | null;
+  referenceNo?: string | null;
+  note?: string | null;
+  enableTracking?: boolean;
 };

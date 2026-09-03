@@ -14,6 +14,7 @@ import {
   useListRooms,
   useListGuests,
   useListPayments,
+  useGetSettings,
   getListReservationsQueryKey,
   type CreateReservationPayload,
   type Reservation,
@@ -67,9 +68,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import {
-  buildReservationExcelRows,
   downloadReservationsExcel,
   latestPaymentMethod,
+  reservationExcelSubtitle,
 } from "@/lib/reservation-excel";
 import {
   RESERVATION_PAYMENT_METHODS,
@@ -92,6 +93,7 @@ export default function Reservations({ embedded }: ReservationsProps) {
   const { data: rooms = [] } = useListRooms();
   const { data: guests = [] } = useListGuests();
   const { data: payments = [] } = useListPayments();
+  const { data: settings } = useGetSettings();
   const createReservationMutation = useCreateReservation();
   const cancelReservationMutation = useCancelReservation();
   const updateReservationMutation = useUpdateReservation();
@@ -1328,10 +1330,31 @@ export default function Reservations({ embedded }: ReservationsProps) {
     }
     setExporting(true);
     try {
-      const rows = buildReservationExcelRows(filteredReservations, guests, rooms, payments);
       const datePart = madeOn || todayYmdPh();
-      await downloadReservationsExcel(rows, `Reservations_${datePart}.xlsx`);
-      toast.success(`Exported ${rows.length} reservation${rows.length === 1 ? "" : "s"}`);
+      await downloadReservationsExcel({
+        reservations: filteredReservations,
+        guests,
+        rooms,
+        payments,
+        hotel: settings
+          ? {
+              hotelName: settings.hotelName,
+              address: settings.address,
+              contactNumber: settings.contactNumber,
+            }
+          : undefined,
+        filename: `Reservations_${datePart}.xlsx`,
+        subtitle: reservationExcelSubtitle({
+          madeOn,
+          dateFrom,
+          dateTo,
+          statusFilter,
+          searchTerm,
+        }),
+      });
+      toast.success(
+        `Exported ${filteredReservations.length} reservation${filteredReservations.length === 1 ? "" : "s"}`,
+      );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to export Excel file");
     } finally {

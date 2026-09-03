@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/client";
 import { newId } from "./mappers";
 import { summarizePosOrders, type PosSalesSummary } from "@/lib/pos-sales-stats";
 import type {
+  AdjustPosStockInput,
   CreatePosCategoryInput,
   CreatePosProductInput,
   CreatePosTableInput,
@@ -13,6 +14,8 @@ import type {
   PosOrderItem,
   PosPayment,
   PosProduct,
+  PosStockMovement,
+  PosStockMovementType,
   PosTable,
   PosTableStatus,
   SavePosOrderInput,
@@ -20,6 +23,7 @@ import type {
   UpdatePosProductInput,
   UpdatePosTableInput,
 } from "./pos-types";
+import { DEFAULT_REORDER_POINT, stockQty } from "@/lib/pos-inventory";
 
 export type * from "./pos-types";
 export type { PosSalesSummary };
@@ -31,6 +35,7 @@ const qk = {
   orders: (filter?: string) => ["pos", "orders", filter ?? "all"] as const,
   order: (id: string) => ["pos", "order", id] as const,
   sales: (range: string) => ["pos", "sales", range] as const,
+  movements: ["pos", "stock-movements"] as const,
 };
 
 function mapCategory(row: Record<string, unknown>): PosCategory {
@@ -57,6 +62,8 @@ function mapProduct(row: Record<string, unknown>): PosProduct {
     cost: Number(row.cost ?? 0),
     trackStock: Boolean(row.track_stock),
     stockQty: Number(row.stock_qty ?? 0),
+    reorderPoint:
+      row.reorder_point == null ? DEFAULT_REORDER_POINT : Number(row.reorder_point),
     unit: String(row.unit ?? "each"),
     isActive: Boolean(row.is_active ?? true),
     isQuickSell: Boolean(row.is_quick_sell),
@@ -206,6 +213,112 @@ function calcTotals(
   return { subtotal, discountAmount: discount, taxAmount, totalAmount };
 }
 
+function isMissingRelationError(error: { code?: string; message?: string }) {
+  const code = error.code ?? "";
+  const message = (error.message ?? "").toLowerCase();
+  return (
+    code === "42P01" ||
+    code === "PGRST205" ||
+    message.includes("does not exist") ||
+    message.includes("schema cache")
+  );
+}
+
+function isMissingColumnError(error: { code?: string; message?: string }, column: string) {
+  const message = (error.message ?? "").toLowerCase();
+  return (
+    error.code === "42703" ||
+    error.code === "PGRST204" ||
+    message.includes(column.toLowerCase())
+  );
+}
+
+async function recordStockMovement(
+  supabase: ReturnType<typeof createClient>,
+  input: {
+    productId: string;
+    type: PosStockMovementType;
+    quantity: number;
+    qtyBefore: number;
+    qtyAfter: number;
+    reason?: string | null;
+    referenceNo?: string | null;
+    note?: string | null;
+  },
+) {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  const { error } = await supabase.from("pos_stock_movements").insert({
+    id: newId(),
+    product_id: input.productId,
+    type: input.type,
+    quantity: stockQty(input.quantity),
+    qty_before: stockQty(input.qtyBefore),
+    qty_after: stockQty(input.qtyAfter),
+    reason: input.reason ?? null,
+    reference_no: input.referenceNo ?? null,
+    note: input.note ?? null,
+    created_by: user?.id ?? null,
+  });
+  if (error && !isMissingRelationError(error)) throw error;
+}
+
+async function applyProductStockDelta(
+  supabase: ReturnType<typeof createClient>,
+  input: {
+    productId: string;
+    delta: number;
+    type: PosStockMovementType;
+    reason?: string | null;
+    referenceNo?: string | null;
+    note?: string | null;
+    enableTracking?: boolean;
+    countedQty?: number;
+  },
+) {
+  const { data: product, error } = await supabase
+    .from("pos_products")
+    .select("track_stock, stock_qty")
+    .eq("id", input.productId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!product) throw new Error("Product not found.");
+
+  const tracking = Boolean(product.track_stock) || Boolean(input.enableTracking);
+  if (!tracking) return null;
+
+  const current = stockQty(Number(product.stock_qty ?? 0));
+  const delta =
+    input.type === "count" && input.countedQty != null
+      ? stockQty(input.countedQty) - current
+      : stockQty(input.delta);
+  const next = stockQty(Math.max(0, current + delta));
+  const patch: Record<string, unknown> = {
+    stock_qty: next,
+    updated_at: new Date().toISOString(),
+  };
+  if (input.enableTracking && !product.track_stock) patch.track_stock = true;
+
+  const { error: updErr } = await supabase
+    .from("pos_products")
+    .update(patch)
+    .eq("id", input.productId);
+  if (updErr) throw updErr;
+
+  await recordStockMovement(supabase, {
+    productId: input.productId,
+    type: input.type,
+    quantity: delta,
+    qtyBefore: current,
+    qtyAfter: next,
+    reason: input.reason,
+    referenceNo: input.referenceNo,
+    note: input.note,
+  });
+  return { qtyBefore: current, qtyAfter: next, delta };
+}
+
 async function replaceOrderItems(
   supabase: ReturnType<typeof createClient>,
   orderId: string,
@@ -232,25 +345,19 @@ async function adjustStock(
   supabase: ReturnType<typeof createClient>,
   items: SavePosOrderInput["items"],
   direction: "decrement" | "increment",
+  referenceNo?: string | null,
 ) {
   for (const item of items) {
     if (!item.productId) continue;
-    const { data: product } = await supabase
-      .from("pos_products")
-      .select("track_stock, stock_qty")
-      .eq("id", item.productId)
-      .maybeSingle();
-    if (!product?.track_stock) continue;
-    const current = Number(product.stock_qty ?? 0);
-    const delta = Number(item.quantity);
-    const next =
-      direction === "decrement"
-        ? Math.max(0, current - delta)
-        : current + delta;
-    await supabase
-      .from("pos_products")
-      .update({ stock_qty: next, updated_at: new Date().toISOString() })
-      .eq("id", item.productId);
+    const qty = Number(item.quantity);
+    if (!qty) continue;
+    await applyProductStockDelta(supabase, {
+      productId: item.productId,
+      delta: direction === "decrement" ? -qty : qty,
+      type: direction === "decrement" ? "sale" : "void_sale",
+      referenceNo: referenceNo ?? null,
+      note: item.productName,
+    });
   }
 }
 
@@ -386,15 +493,52 @@ export function useCreatePosProduct() {
         cost: input.cost ?? 0,
         track_stock: input.trackStock ?? false,
         stock_qty: input.stockQty ?? 0,
+        reorder_point: input.reorderPoint ?? DEFAULT_REORDER_POINT,
         unit: input.unit ?? "each",
         is_active: input.isActive ?? true,
         is_quick_sell: input.isQuickSell ?? false,
         sort_order: input.sortOrder ?? 0,
       });
-      if (error) throw error;
+      if (error) {
+        if (isMissingColumnError(error, "reorder_point")) {
+          const { error: retryErr } = await supabase.from("pos_products").insert({
+            id,
+            category_id: input.categoryId ?? null,
+            sku: input.sku?.trim() || null,
+            name: input.name.trim(),
+            description: input.description ?? null,
+            price: input.price,
+            cost: input.cost ?? 0,
+            track_stock: input.trackStock ?? false,
+            stock_qty: input.stockQty ?? 0,
+            unit: input.unit ?? "each",
+            is_active: input.isActive ?? true,
+            is_quick_sell: input.isQuickSell ?? false,
+            sort_order: input.sortOrder ?? 0,
+          });
+          if (retryErr) throw retryErr;
+        } else {
+          throw error;
+        }
+      }
+      const opening = Number(input.stockQty ?? 0);
+      if (input.trackStock && opening > 0) {
+        await recordStockMovement(supabase, {
+          productId: id,
+          type: "receive",
+          quantity: opening,
+          qtyBefore: 0,
+          qtyAfter: opening,
+          reason: "opening",
+          note: "Opening stock",
+        });
+      }
       return id;
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.products }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.products });
+      qc.invalidateQueries({ queryKey: qk.movements });
+    },
   });
 }
 
@@ -414,6 +558,7 @@ export function useUpdatePosProduct() {
       if (input.cost !== undefined) patch.cost = input.cost;
       if (input.trackStock !== undefined) patch.track_stock = input.trackStock;
       if (input.stockQty !== undefined) patch.stock_qty = input.stockQty;
+      if (input.reorderPoint !== undefined) patch.reorder_point = input.reorderPoint;
       if (input.unit !== undefined) patch.unit = input.unit;
       if (input.isActive !== undefined) patch.is_active = input.isActive;
       if (input.isQuickSell !== undefined) patch.is_quick_sell = input.isQuickSell;
@@ -422,9 +567,23 @@ export function useUpdatePosProduct() {
         .from("pos_products")
         .update(patch)
         .eq("id", input.id);
-      if (error) throw error;
+      if (error) {
+        if (patch.reorder_point !== undefined && isMissingColumnError(error, "reorder_point")) {
+          delete patch.reorder_point;
+          const { error: retryErr } = await supabase
+            .from("pos_products")
+            .update(patch)
+            .eq("id", input.id);
+          if (retryErr) throw retryErr;
+        } else {
+          throw error;
+        }
+      }
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.products }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.products });
+      qc.invalidateQueries({ queryKey: qk.movements });
+    },
   });
 }
 
@@ -685,7 +844,7 @@ export function useSavePosOrder() {
           received_by: user?.id ?? null,
         });
         if (payErr) throw payErr;
-        await adjustStock(supabase, input.items, "decrement");
+        await adjustStock(supabase, input.items, "decrement", orderId);
       }
 
       return { orderId, ...totals };
@@ -780,6 +939,95 @@ export function usePosSalesSummary(fromIso: string, toIso?: string, enabled = tr
     queryKey: qk.sales(`${fromIso}:${to}`),
     enabled: Boolean(enabled && fromIso && to),
     queryFn: () => fetchPosSalesSummary(fromIso, to),
+  });
+}
+
+function mapStockMovement(row: Record<string, unknown>): PosStockMovement {
+  const product = row.pos_products as { name?: string; sku?: string | null } | null;
+  return {
+    id: String(row.id),
+    productId: String(row.product_id ?? ""),
+    productName: product?.name ?? "",
+    sku: product?.sku ?? null,
+    type: String(row.type ?? "adjust") as PosStockMovementType,
+    quantity: Number(row.quantity ?? 0),
+    qtyBefore: Number(row.qty_before ?? 0),
+    qtyAfter: Number(row.qty_after ?? 0),
+    reason: (row.reason as string | null) ?? null,
+    referenceNo: (row.reference_no as string | null) ?? null,
+    note: (row.note as string | null) ?? null,
+    createdBy: (row.created_by as string | null) ?? null,
+    createdAt: String(row.created_at ?? ""),
+  };
+}
+
+export function usePosStockMovements(productId?: string | null) {
+  return useQuery({
+    queryKey: [...qk.movements, productId ?? "all"],
+    queryFn: async () => {
+      const supabase = createClient();
+      let query = supabase
+        .from("pos_stock_movements")
+        .select("*, pos_products ( name, sku )")
+        .order("created_at", { ascending: false })
+        .limit(200);
+      if (productId) query = query.eq("product_id", productId);
+      const { data, error } = await query;
+      if (error) {
+        if (isMissingRelationError(error)) return [] as PosStockMovement[];
+        throw error;
+      }
+      return (data ?? []).map((row) => mapStockMovement(row as Record<string, unknown>));
+    },
+  });
+}
+
+export function useAdjustPosStock() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: AdjustPosStockInput) => {
+      const qty = stockQty(Number(input.quantity));
+      if (input.type !== "count" && stockQty(Math.abs(qty)) <= 0) {
+        throw new Error("Enter a quantity greater than zero.");
+      }
+      if (input.type === "count" && (input.countedQty == null || !Number.isFinite(input.countedQty))) {
+        throw new Error("Enter the counted on-hand quantity.");
+      }
+      const supabase = createClient();
+      const wasteLike =
+        input.type === "waste" ||
+        input.reason === "spoilage" ||
+        input.reason === "damage" ||
+        input.reason === "theft";
+      const type: PosStockMovementType =
+        wasteLike && input.type !== "receive" && input.type !== "count" ? "waste" : input.type;
+      const delta =
+        type === "receive"
+          ? Math.abs(qty)
+          : type === "waste"
+            ? -Math.abs(qty)
+            : type === "count"
+              ? 0
+              : qty;
+      const result = await applyProductStockDelta(supabase, {
+        productId: input.productId,
+        delta,
+        type,
+        countedQty: input.type === "count" ? stockQty(Number(input.countedQty)) : undefined,
+        reason: input.reason ?? null,
+        referenceNo: input.referenceNo ?? null,
+        note: input.note ?? null,
+        enableTracking: input.enableTracking ?? (type === "receive" || type === "count"),
+      });
+      if (!result) {
+        throw new Error("This product is not tracking stock. Start tracking first.");
+      }
+      return result;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.products });
+      qc.invalidateQueries({ queryKey: qk.movements });
+    },
   });
 }
 
