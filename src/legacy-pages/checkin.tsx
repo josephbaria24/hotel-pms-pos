@@ -12,9 +12,11 @@ import {
   getListReservationsQueryKey,
   getListRoomsQueryKey,
   useGetSettings,
+  useListPayments,
   type Reservation,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
+import { usePosOrders } from "@/lib/api-client/pos";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -75,6 +77,7 @@ import {
   CalendarDays,
   CalendarRange,
   Download,
+  FileSpreadsheet,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useEffect, useMemo, useState, useRef } from "react";
@@ -85,6 +88,7 @@ import { ScrollableTablePane } from "@/components/layout/ScrollableTablePane";
 import { cn } from "@/lib/utils";
 import { countStaySummary } from "@/lib/stays-summary-stats";
 import { contractPaymentSectionHtml, peso, reservationPaymentSummary } from "@/lib/reservation-payment";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 
 /* ───────── UI Helpers matching Dashboard style ───────── */
 
@@ -163,6 +167,8 @@ export default function CheckInOut({ embedded }: CheckInOutProps) {
   const { data: reservations, isLoading } = useListReservations();
   const { data: rooms = [] } = useListRooms();
   const { data: settings } = useGetSettings();
+  const { data: payments = [] } = useListPayments();
+  const { data: posOrders = [] } = usePosOrders();
   const checkInMutation = useCheckIn();
   const checkOutMutation = useCheckOut();
   const contractMutation = useGetReservationContractData();
@@ -446,6 +452,7 @@ export default function CheckInOut({ embedded }: CheckInOutProps) {
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [summaryFrom, setSummaryFrom] = useState(() => format(startOfMonth(new Date()), "yyyy-MM-dd"));
   const [summaryTo, setSummaryTo] = useState(() => format(new Date(), "yyyy-MM-dd"));
+  const [summaryFormat, setSummaryFormat] = useState<"pdf" | "excel">("pdf");
   const [summaryBusy, setSummaryBusy] = useState(false);
 
   const { arrivals, departures, inHouseCount, upcomingReservedCount } = useMemo(() => {
@@ -512,27 +519,47 @@ export default function CheckInOut({ embedded }: CheckInOutProps) {
     }
     setSummaryBusy(true);
     try {
-      const { downloadStaySummaryPdf } = await import("@/lib/stays-summary-pdf");
-      downloadStaySummaryPdf({
-        hotel: {
-          hotelName: settings?.hotelName || "PalawanSU Hotel",
-          address: settings?.address,
-          contactNumber: settings?.contactNumber,
-          email: settings?.email,
-        },
-        from: summaryFrom,
-        to: summaryTo,
-        reservations: reservations ?? [],
-        rooms,
-      });
-      toast({
-        title: "Summary downloaded",
-        description: `PDF saved for ${formatPhDate(summaryFrom)} – ${formatPhDate(summaryTo)}.`,
-      });
+      const hotel = {
+        hotelName: settings?.hotelName || "PalawanSU Hotel",
+        address: settings?.address,
+        contactNumber: settings?.contactNumber,
+        email: settings?.email,
+        checkInTime: settings?.checkInTime,
+      };
+      const rangeLabel = `${formatPhDate(summaryFrom)} – ${formatPhDate(summaryTo)}`;
+      if (summaryFormat === "excel") {
+        const { downloadStaySummaryExcel } = await import("@/lib/stays-summary-excel");
+        await downloadStaySummaryExcel({
+          hotel,
+          from: summaryFrom,
+          to: summaryTo,
+          reservations: reservations ?? [],
+          rooms,
+          payments,
+          posOrders,
+        });
+        toast({
+          title: "Summary downloaded",
+          description: `Excel saved for ${rangeLabel}.`,
+        });
+      } else {
+        const { downloadStaySummaryPdf } = await import("@/lib/stays-summary-pdf");
+        downloadStaySummaryPdf({
+          hotel,
+          from: summaryFrom,
+          to: summaryTo,
+          reservations: reservations ?? [],
+          rooms,
+        });
+        toast({
+          title: "Summary downloaded",
+          description: `PDF saved for ${rangeLabel}.`,
+        });
+      }
       setSummaryOpen(false);
     } catch (error) {
       toast({
-        title: "Could not create PDF",
+        title: summaryFormat === "excel" ? "Could not create Excel" : "Could not create PDF",
         description: error instanceof Error ? error.message : "Please try again.",
         variant: "destructive",
       });
@@ -1752,7 +1779,7 @@ export default function CheckInOut({ embedded }: CheckInOutProps) {
           <DialogHeader>
             <DialogTitle>Download stay summary</DialogTitle>
             <DialogDescription>
-              Choose a from and to date. The PDF lists reservations, check-ins, check-outs, and guests in each room for that range.
+              Choose a date range and format. PDF is a printable report; Excel uses the same styled workbook as Bookings, including agency, special request, and payment details.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-1">
@@ -1780,6 +1807,41 @@ export default function CheckInOut({ embedded }: CheckInOutProps) {
                 />
               </div>
             </div>
+            <div className="space-y-2">
+              <Label>Format</Label>
+              <RadioGroup
+                value={summaryFormat}
+                onValueChange={(value) => setSummaryFormat(value as "pdf" | "excel")}
+                className="grid grid-cols-2 gap-2"
+              >
+                <label
+                  htmlFor="stay-summary-pdf"
+                  className={cn(
+                    "flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2.5 text-sm transition-colors",
+                    summaryFormat === "pdf"
+                      ? "border-primary bg-primary/5"
+                      : "border-border bg-card hover:bg-muted/40",
+                  )}
+                >
+                  <RadioGroupItem value="pdf" id="stay-summary-pdf" />
+                  <FileText className="h-4 w-4 text-muted-foreground" />
+                  <span className="font-medium">PDF</span>
+                </label>
+                <label
+                  htmlFor="stay-summary-excel"
+                  className={cn(
+                    "flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2.5 text-sm transition-colors",
+                    summaryFormat === "excel"
+                      ? "border-primary bg-primary/5"
+                      : "border-border bg-card hover:bg-muted/40",
+                  )}
+                >
+                  <RadioGroupItem value="excel" id="stay-summary-excel" />
+                  <FileSpreadsheet className="h-4 w-4 text-muted-foreground" />
+                  <span className="font-medium">Excel</span>
+                </label>
+              </RadioGroup>
+            </div>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               <div className="rounded-xl border bg-muted/30 px-3 py-2">
                 <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Reservations</p>
@@ -1804,8 +1866,18 @@ export default function CheckInOut({ embedded }: CheckInOutProps) {
               Cancel
             </Button>
             <Button type="button" onClick={handleDownloadStaySummary} disabled={summaryBusy}>
-              {summaryBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-              {summaryBusy ? "Preparing…" : "Download PDF"}
+              {summaryBusy ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : summaryFormat === "excel" ? (
+                <FileSpreadsheet className="h-4 w-4" />
+              ) : (
+                <Download className="h-4 w-4" />
+              )}
+              {summaryBusy
+                ? "Preparing…"
+                : summaryFormat === "excel"
+                  ? "Download Excel"
+                  : "Download PDF"}
             </Button>
           </DialogFooter>
         </DialogContent>

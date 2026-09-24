@@ -549,6 +549,11 @@ function TransactionRow({ order }: { order: PosOrder }) {
         >
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-1.5">
+              {order.callNumber != null ? (
+                <span className="inline-flex items-center rounded-md border border-teal-600/35 bg-teal-500/10 px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-teal-700 dark:text-teal-300 sm:text-xs">
+                  #{order.callNumber}
+                </span>
+              ) : null}
               <span className="text-xs font-medium sm:text-sm">{order.orderNumber}</span>
               <PosOrderStatusBadge status={order.status} />
             </div>

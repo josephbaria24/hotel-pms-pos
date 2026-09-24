@@ -48,6 +48,7 @@ import { cn } from "@/lib/utils";
 
 const filters = [
   { id: "active", label: "Open / Held", shortLabel: "Open" },
+  { id: "pending", label: "Pending", shortLabel: "Pending" },
   { id: "paid", label: "Paid", shortLabel: "Paid" },
   { id: "void", label: "Void", shortLabel: "Void" },
   { id: "all", label: "All", shortLabel: "All" },
@@ -56,6 +57,10 @@ const filters = [
 const filterBadgeClass: Record<string, { idle: string; selected: string }> = {
   active: {
     idle: "border-sky-500/40 bg-sky-500/15 text-sky-700 dark:text-sky-300",
+    selected: "border-white/30 bg-white/20 text-white",
+  },
+  pending: {
+    idle: "border-orange-500/40 bg-orange-500/15 text-orange-700 dark:text-orange-300",
     selected: "border-white/30 bg-white/20 text-white",
   },
   paid: {
@@ -170,6 +175,8 @@ export function PosOrdersView() {
     if (!q) return true;
     const haystack = [
       order.orderNumber,
+      order.callNumber != null ? String(order.callNumber) : null,
+      order.callNumber != null ? `#${order.callNumber}` : null,
       order.customerName,
       order.tableName,
       order.roomNumber,
@@ -185,15 +192,18 @@ export function PosOrdersView() {
   const filterCounts = useMemo(() => {
     const scoped = allOrders.filter(matchesExtra);
     let paid = 0;
+    let pending = 0;
     let voided = 0;
     let active = 0;
     for (const order of scoped) {
       if (order.status === "paid") paid += 1;
+      else if (order.status === "pending") pending += 1;
       else if (order.status === "void") voided += 1;
       else if (order.status === "open" || order.status === "held") active += 1;
     }
     return {
       active,
+      pending,
       paid,
       void: voided,
       all: scoped.length,
@@ -236,7 +246,7 @@ export function PosOrdersView() {
   return (
     <PosPageShell
       title="Orders"
-      description="Open tickets, held orders, and completed sales."
+      description="Open tickets with call numbers — shout the number when the order is ready for pickup."
       icon={ClipboardList}
     >
       <div className="space-y-2 sm:space-y-3">
@@ -360,11 +370,27 @@ export function PosOrdersView() {
           {sorted.map((order) => {
             const canResume =
               order.status === "open" || order.status === "held";
+            const canVoid =
+              canResume || order.status === "pending";
             return (
               <Card key={order.id} className="border-border/70">
                 <CardContent className="p-2.5 sm:p-4">
                   <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0 space-y-0.5 sm:space-y-1.5">
+                    <div className="flex min-w-0 flex-1 items-start gap-2.5 sm:gap-3">
+                      {order.callNumber != null ? (
+                        <div
+                          className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-xl border border-teal-600/35 bg-teal-500/10 sm:h-14 sm:w-14"
+                          title="Call this number when the order is ready"
+                        >
+                          <span className="text-[9px] font-semibold uppercase tracking-wide text-teal-700/80 dark:text-teal-300/80">
+                            Call
+                          </span>
+                          <span className="text-lg font-bold leading-none tabular-nums text-teal-700 dark:text-teal-300 sm:text-xl">
+                            {order.callNumber}
+                          </span>
+                        </div>
+                      ) : null}
+                      <div className="min-w-0 space-y-0.5 sm:space-y-1.5">
                       <div className="flex flex-wrap items-center gap-1 sm:gap-2">
                         <span className="truncate text-xs font-semibold tracking-tight sm:text-sm">
                           {order.orderNumber}
@@ -379,6 +405,9 @@ export function PosOrdersView() {
                         {order.tableName ? ` · Table ${order.tableName}` : ""}
                         {order.roomNumber ? ` · Room ${order.roomNumber}` : ""}
                         {order.customerName ? ` · ${order.customerName}` : ""}
+                        {order.status === "pending"
+                          ? " · Awaiting PMS checkout payment"
+                          : ""}
                       </p>
                       <ul className="space-y-0 text-[11px] sm:space-y-0.5 sm:text-sm">
                         {order.items.slice(0, 4).map((item, index) => (
@@ -404,31 +433,38 @@ export function PosOrdersView() {
                           </li>
                         )}
                       </ul>
+                      </div>
                     </div>
                     <div className="shrink-0 text-right text-sm font-semibold tabular-nums sm:text-lg">
                       {formatPeso(order.totalAmount)}
                     </div>
                   </div>
-                  {canResume ? (
+                  {canResume || canVoid ? (
                     <div className="mt-2 grid grid-cols-2 gap-1.5 sm:mt-3 sm:flex sm:justify-end">
-                      <Button
-                        asChild
-                        size="sm"
-                        className="h-8 bg-teal-600 px-2 text-xs hover:bg-teal-700 sm:h-9 sm:px-3"
-                      >
-                        <Link href={`/pos?order=${order.id}`}>
-                          <RotateCcw className="mr-1 h-3.5 w-3.5" />
-                          Resume
-                        </Link>
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-8 px-2 text-xs text-destructive sm:h-9 sm:px-3"
-                        onClick={() => setVoiding(order)}
-                      >
-                        Void
-                      </Button>
+                      {canResume ? (
+                        <Button
+                          asChild
+                          size="sm"
+                          className="h-8 bg-teal-600 px-2 text-xs hover:bg-teal-700 sm:h-9 sm:px-3"
+                        >
+                          <Link href={`/pos?order=${order.id}`}>
+                            <RotateCcw className="mr-1 h-3.5 w-3.5" />
+                            Resume
+                          </Link>
+                        </Button>
+                      ) : (
+                        <span />
+                      )}
+                      {canVoid ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8 px-2 text-xs text-destructive sm:h-9 sm:px-3"
+                          onClick={() => setVoiding(order)}
+                        >
+                          Void
+                        </Button>
+                      ) : null}
                     </div>
                   ) : null}
                 </CardContent>
@@ -443,8 +479,9 @@ export function PosOrdersView() {
           <AlertDialogHeader>
             <AlertDialogTitle>Void {voiding?.orderNumber}?</AlertDialogTitle>
             <AlertDialogDescription>
-              This cancels the open ticket. Stock is not adjusted for unpaid
-              voids.
+              {voiding?.status === "pending"
+                ? "This cancels the room charge, restores stock, and removes the amount from the guest folio."
+                : "This cancels the open ticket. Stock is not adjusted for unpaid voids."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="flex-row justify-end gap-2 space-x-0 sm:space-x-0">

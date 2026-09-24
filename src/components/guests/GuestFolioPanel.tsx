@@ -30,6 +30,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { formatPhDate, formatPhDateTime } from "@/lib/datetime";
+import { isPosRoomCharge, posExtrasNotOnStay } from "@/lib/pos-folio";
 import {
   ArrowLeft,
   BedDouble,
@@ -231,8 +232,12 @@ export function GuestFolioPanel({
     const active = guestStays.filter((s) => isActiveStay(s.status));
     const roomCharges = active.reduce((sum, s) => sum + Number(s.totalAmount || 0), 0);
     const roomPaid = active.reduce((sum, s) => sum + Number(s.paidAmount || 0), 0);
-    const posCharges = guestPos.reduce((sum, o) => sum + Number(o.totalAmount || 0), 0);
-    const posPaid = guestPos.reduce((sum, o) => sum + Number(o.paidAmount || 0), 0);
+    const cashPos = posExtrasNotOnStay(guestPos);
+    const posCharges = cashPos.reduce((sum, o) => sum + Number(o.totalAmount || 0), 0);
+    const posPaid = cashPos.reduce((sum, o) => sum + Number(o.paidAmount || 0), 0);
+    const roomPostedPos = guestPos
+      .filter(isPosRoomCharge)
+      .reduce((sum, o) => sum + Number(o.totalAmount || 0), 0);
     return {
       stays: guestStays.length,
       activeStays: active.length,
@@ -240,6 +245,7 @@ export function GuestFolioPanel({
       roomPaid,
       posCharges,
       posPaid,
+      roomPostedPos,
       billed: roomCharges + posCharges,
       collected: roomPaid + posPaid,
       balance: Math.max(0, roomCharges - roomPaid) + Math.max(0, posCharges - posPaid),
@@ -641,9 +647,14 @@ function StayFolioCard({
   posLoading: boolean;
 }) {
   const [, setLocation] = useLocation();
-  const extras = posOrders.reduce((sum, o) => sum + Number(o.totalAmount || 0), 0);
+  const roomPosted = posOrders.filter(isPosRoomCharge);
+  const roomPostedTotal = roomPosted.reduce((sum, o) => sum + Number(o.totalAmount || 0), 0);
+  const cashPos = posExtrasNotOnStay(posOrders);
+  const extras = cashPos.reduce((sum, o) => sum + Number(o.totalAmount || 0), 0);
+  const stayOnly = Math.max(0, Number(stay.totalAmount || 0) - roomPostedTotal);
   const billed = Number(stay.totalAmount || 0) + extras;
-  const collected = Number(stay.paidAmount || 0) + posOrders.reduce((sum, o) => sum + Number(o.paidAmount || 0), 0);
+  const collected =
+    Number(stay.paidAmount || 0) + cashPos.reduce((sum, o) => sum + Number(o.paidAmount || 0), 0);
   const due = Math.max(0, billed - collected);
 
   return (
@@ -730,8 +741,14 @@ function StayFolioCard({
             </button>
           </div>
           <dl className="divide-y text-xs">
-            <ChargeRow label="Room / stay" value={formatPhp(stay.totalAmount)} />
-            <ChargeRow label="POS / extras" value={formatPhp(extras)} muted={extras === 0} />
+            <ChargeRow label="Room / stay" value={formatPhp(stayOnly)} />
+            <ChargeRow
+              label="POS room charges"
+              value={formatPhp(roomPostedTotal)}
+              muted={roomPostedTotal === 0}
+              warn={roomPostedTotal > 0 && due > 0}
+            />
+            <ChargeRow label="Other POS / extras" value={formatPhp(extras)} muted={extras === 0} />
             <ChargeRow label="Total billed" value={formatPhp(billed)} strong />
             <ChargeRow label="Paid on stay" value={formatPhp(stay.paidAmount)} />
             <ChargeRow label="Balance" value={formatPhp(due)} strong warn={due > 0} />
@@ -812,6 +829,8 @@ function ChargeRow({
 }
 
 function PosLine({ order }: { order: PosOrder }) {
+  const roomCharge = isPosRoomCharge(order);
+  const due = Math.max(0, Number(order.totalAmount || 0) - Number(order.paidAmount || 0));
   return (
     <div className="rounded-lg border bg-muted/20 px-3 py-2">
       <div className="flex items-start justify-between gap-3">
@@ -821,8 +840,18 @@ function PosLine({ order }: { order: PosOrder }) {
             {order.orderType.replace(/_/g, " ")} · {order.status}
             {order.roomNumber ? ` · Room ${order.roomNumber}` : ""}
           </p>
+          {roomCharge ? (
+            <p className="mt-0.5 text-[10px] font-medium text-amber-700">
+              Charged to room · {due > 0 ? "due at checkout" : "settled on stay"}
+            </p>
+          ) : null}
         </div>
-        <p className="shrink-0 text-xs font-semibold tabular-nums">{formatPhp(order.totalAmount)}</p>
+        <div className="shrink-0 text-right">
+          <p className="text-xs font-semibold tabular-nums">{formatPhp(order.totalAmount)}</p>
+          {roomCharge && due > 0 ? (
+            <p className="text-[10px] font-medium tabular-nums text-amber-700">Due {formatPhp(due)}</p>
+          ) : null}
+        </div>
       </div>
       {order.items.length > 0 ? (
         <ul className="mt-1.5 space-y-0.5 text-[11px] text-muted-foreground">

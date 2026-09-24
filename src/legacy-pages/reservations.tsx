@@ -20,6 +20,7 @@ import {
   type Reservation,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
+import { usePosOrders } from "@/lib/api-client/pos";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -94,6 +95,7 @@ export default function Reservations({ embedded }: ReservationsProps) {
   const { data: guests = [] } = useListGuests();
   const { data: payments = [] } = useListPayments();
   const { data: settings } = useGetSettings();
+  const { data: posOrders = [] } = usePosOrders();
   const createReservationMutation = useCreateReservation();
   const cancelReservationMutation = useCancelReservation();
   const updateReservationMutation = useUpdateReservation();
@@ -1336,6 +1338,7 @@ export default function Reservations({ embedded }: ReservationsProps) {
         guests,
         rooms,
         payments,
+        posOrders,
         hotel: settings
           ? {
               hotelName: settings.hotelName,

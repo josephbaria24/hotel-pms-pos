@@ -6,11 +6,15 @@ import {
   useAdminBulkUpdateStudents,
   useAdminClassroom,
   useAdminDeleteStudents,
+  useAdminProgressSnapshots,
+  useAdminResetProgress,
+  useAdminRestoreProgress,
   useAdminUpdateStudent,
   useOperationMode,
   useSetOperationMode,
   type ClassroomUser,
   type OperationMode,
+  type ProgressSnapshot,
 } from "@/lib/api-client";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { ScrollableTablePane } from "@/components/layout/ScrollableTablePane";
@@ -44,17 +48,47 @@ import {
   Building2,
   CheckCircle2,
   GraduationCap,
+  History,
   Power,
   PowerOff,
   RefreshCw,
+  RotateCcw,
   Search,
   Shield,
   Trash2,
+  Undo2,
   X,
 } from "lucide-react";
 
 function hasPracticeActivity(s: ClassroomUser) {
   return s.reservationsCount > 0 || s.paymentsCount > 0 || s.posOrdersCount > 0;
+}
+
+function formatSnapshotWhen(iso: string) {
+  if (!iso) return "—";
+  try {
+    return new Date(iso).toLocaleString(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
+  } catch {
+    return iso;
+  }
+}
+
+function snapshotTotals(snap: ProgressSnapshot) {
+  const perUser = Array.isArray(snap.summary.per_user) ? snap.summary.per_user : [];
+  let guests = 0;
+  let reservations = 0;
+  let payments = 0;
+  let posOrders = 0;
+  for (const row of perUser) {
+    guests += Number(row.guests ?? 0);
+    reservations += Number(row.reservations ?? 0);
+    payments += Number(row.payments ?? 0);
+    posOrders += Number(row.pos_orders ?? 0);
+  }
+  return { guests, reservations, payments, posOrders };
 }
 
 type StatusFilter = "all" | "active" | "inactive";
@@ -187,6 +221,15 @@ export default function AdminClassroomPage() {
   const updateStudent = useAdminUpdateStudent();
   const bulkUpdate = useAdminBulkUpdateStudents();
   const deleteStudents = useAdminDeleteStudents();
+  const resetProgress = useAdminResetProgress();
+  const restoreProgress = useAdminRestoreProgress();
+  const {
+    data: progressHistory,
+    isLoading: historyLoading,
+    isError: historyError,
+    error: historyErr,
+    refetch: refetchHistory,
+  } = useAdminProgressSnapshots();
   const { data: operationMode = "lab", isLoading: modeLoading } =
     useOperationMode();
   const setOperationMode = useSetOperationMode();
@@ -204,7 +247,9 @@ export default function AdminClassroomPage() {
     updateStudent.isPending ||
     bulkUpdate.isPending ||
     deleteStudents.isPending ||
-    setOperationMode.isPending;
+    setOperationMode.isPending ||
+    resetProgress.isPending ||
+    restoreProgress.isPending;
   const isShared = operationMode === "shared";
 
   const students = useMemo(() => {
@@ -383,6 +428,98 @@ export default function AdminClassroomPage() {
     } catch (err) {
       toast({
         title: "Action failed",
+        description: err instanceof Error ? err.message : "Try again.",
+        variant: "destructive",
+      });
+    }
+  }
+
+  async function runResetProgress(scope: "selected" | "all_staff") {
+    const ids =
+      scope === "selected"
+        ? [...selected].filter((id) => id !== user?.id)
+        : (data ?? []).filter((s) => s.role === "staff").map((s) => s.id);
+
+    if (ids.length === 0) {
+      toast({
+        title: scope === "selected" ? "Nothing selected" : "No staff accounts",
+        description:
+          scope === "selected"
+            ? "Select one or more students first."
+            : "There are no staff/student accounts to reset.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const label =
+      scope === "selected"
+        ? `${ids.length} selected account${ids.length === 1 ? "" : "s"}`
+        : `all ${ids.length} staff/student account${ids.length === 1 ? "" : "s"}`;
+
+    const ok = window.confirm(
+      `Reset PMS + POS practice progress for ${label}?\n\n` +
+        "Guests, reservations, payments, POS orders, and activity will be erased. " +
+        "Accounts, rooms, and menus stay. Tour status will be reset.\n\n" +
+        "A history snapshot is saved so you can restore later.",
+    );
+    if (!ok) return;
+
+    try {
+      const result = await resetProgress.mutateAsync({
+        userIds: ids,
+        resetTour: true,
+        note:
+          scope === "selected"
+            ? `Reset selected (${ids.length})`
+            : `Reset all staff (${ids.length})`,
+      });
+      clearSelection();
+      toast({
+        title: `Progress reset for ${result.users_reset ?? ids.length} account(s)`,
+        description: "Saved to Progress history — you can restore anytime.",
+      });
+    } catch (err) {
+      toast({
+        title: "Reset failed",
+        description:
+          err instanceof Error
+            ? err.message
+            : "Run 013_admin_progress_reset.sql in Supabase, then try again.",
+        variant: "destructive",
+      });
+    }
+  }
+
+  async function runRestoreSnapshot(snap: ProgressSnapshot) {
+    if (snap.action !== "reset") {
+      toast({
+        title: "Cannot restore this entry",
+        description: "Only reset snapshots can be restored.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const ok = window.confirm(
+      `Restore progress from ${formatSnapshotWhen(snap.createdAt)}?\n\n` +
+        `This replaces current PMS/POS practice data for ${snap.userCount} account(s). ` +
+        "Current progress is backed up in history first.",
+    );
+    if (!ok) return;
+
+    try {
+      const result = await restoreProgress.mutateAsync({
+        snapshotId: snap.id,
+        note: `Restore ${snap.id.slice(0, 8)}`,
+      });
+      toast({
+        title: `Restored ${result.restored_users ?? snap.userCount} account(s)`,
+        description: "Current progress was backed up in history.",
+      });
+    } catch (err) {
+      toast({
+        title: "Restore failed",
         description: err instanceof Error ? err.message : "Try again.",
         variant: "destructive",
       });
@@ -684,6 +821,26 @@ export default function AdminClassroomPage() {
           </Button>
           <Button
             size="sm"
+            variant="outline"
+            className="border-amber-500/40 text-amber-700 hover:bg-amber-500/10 dark:text-amber-400"
+            disabled={busy || selected.size === 0}
+            onClick={() => void runResetProgress("selected")}
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            Reset progress
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="border-amber-500/40 text-amber-700 hover:bg-amber-500/10 dark:text-amber-400"
+            disabled={busy}
+            onClick={() => void runResetProgress("all_staff")}
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            Reset all staff
+          </Button>
+          <Button
+            size="sm"
             variant="destructive"
             disabled={busy || selected.size === 0}
             onClick={() => void runBulk("delete")}
@@ -868,6 +1025,134 @@ export default function AdminClassroomPage() {
           </Table>
         )}
       </ScrollableTablePane>
+
+      <div className="space-y-3 rounded-xl border border-border/80 bg-card p-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+              <History className="h-4 w-4" />
+            </div>
+            <div>
+              <h2 className="text-sm font-semibold">Progress history</h2>
+              <p className="mt-0.5 text-sm text-muted-foreground">
+                Each reset is logged here. Restore brings back PMS and POS practice
+                data (guests, reservations, payments, orders). Accounts and catalogs
+                are never deleted by reset.
+              </p>
+            </div>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={() => void refetchHistory()}
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Refresh history
+          </Button>
+        </div>
+
+        {historyError ? (
+          <div className="rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            Could not load progress history. Run{" "}
+            <code className="rounded bg-muted px-1 py-0.5 text-foreground">
+              013_admin_progress_reset.sql
+            </code>{" "}
+            in Supabase, then refresh.
+            {historyErr instanceof Error ? ` (${historyErr.message})` : null}
+          </div>
+        ) : null}
+
+        {historyLoading ? (
+          <div className="space-y-2">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} className="h-14 w-full" />
+            ))}
+          </div>
+        ) : (progressHistory ?? []).length === 0 ? (
+          <p className="py-6 text-center text-sm text-muted-foreground">
+            No resets yet. Use Reset progress or Reset all staff to create a
+            restorable snapshot.
+          </p>
+        ) : (
+          <div className="overflow-x-auto rounded-lg border border-border/60">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>When</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Accounts</TableHead>
+                  <TableHead>Cleared</TableHead>
+                  <TableHead>Note</TableHead>
+                  <TableHead className="text-right">Action</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(progressHistory ?? []).map((snap) => {
+                  const totals = snapshotTotals(snap);
+                  const isReset = snap.action === "reset";
+                  return (
+                    <TableRow key={snap.id}>
+                      <TableCell className="whitespace-nowrap text-sm">
+                        <div className="flex flex-col gap-0.5">
+                          <span>{formatSnapshotWhen(snap.createdAt)}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {snap.createdByName || "Admin"}
+                          </span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={isReset ? "secondary" : "outline"}>
+                          {isReset ? "Reset" : "Pre-restore backup"}
+                        </Badge>
+                        {snap.restoredAt ? (
+                          <p className="mt-1 text-[11px] text-muted-foreground">
+                            Restored {formatSnapshotWhen(snap.restoredAt)}
+                          </p>
+                        ) : null}
+                      </TableCell>
+                      <TableCell className="tabular-nums text-sm">
+                        {snap.userCount}
+                      </TableCell>
+                      <TableCell>
+                        {isReset ? (
+                          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                            <span>{totals.guests} guests</span>
+                            <span>{totals.reservations} res</span>
+                            <span>{totals.payments} pay</span>
+                            <span>{totals.posOrders} POS</span>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="max-w-[14rem] truncate text-sm text-muted-foreground">
+                        {snap.note || "—"}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {isReset ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={busy}
+                            onClick={() => void runRestoreSnapshot(snap)}
+                          >
+                            <Undo2 className="h-3.5 w-3.5" />
+                            Restore
+                          </Button>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">Backup</span>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

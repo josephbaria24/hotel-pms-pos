@@ -31,6 +31,27 @@ export type ClassroomUser = {
 
 export type OperationMode = "lab" | "shared";
 
+export type ProgressSnapshot = {
+  id: string;
+  createdAt: string;
+  createdBy: string | null;
+  createdByName: string | null;
+  action: "reset" | "restore_backup" | string;
+  note: string | null;
+  userIds: string[];
+  userCount: number;
+  summary: {
+    users_reset?: number;
+    reset_tour?: boolean;
+    per_user?: Array<Record<string, unknown>>;
+    restored_from?: string;
+    users?: number;
+    [key: string]: unknown;
+  };
+  restoredAt: string | null;
+  restoredBy: string | null;
+};
+
 export type Guest = {
   id: string;
   firstName: string;

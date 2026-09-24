@@ -49,7 +49,7 @@ export type PosTable = {
   openOrderNumber?: string | null;
 };
 
-export type PosOrderStatus = "open" | "held" | "paid" | "void" | "refunded";
+export type PosOrderStatus = "open" | "held" | "pending" | "paid" | "void" | "refunded";
 export type PosOrderType =
   | "walk_in"
   | "dine_in"
@@ -92,6 +92,8 @@ export type PosPayment = {
 export type PosOrder = {
   id: string;
   orderNumber: string;
+  /** Short daily counter number for calling customers at the counter */
+  callNumber: number | null;
   status: PosOrderStatus;
   orderType: PosOrderType;
   tableId: string | null;
@@ -143,6 +145,7 @@ export type CreatePosProductInput = {
   categoryId?: string | null;
   sku?: string | null;
   description?: string | null;
+  imageUrl?: string | null;
   price: number;
   cost?: number;
   trackStock?: boolean;
@@ -176,11 +179,13 @@ export type SavePosOrderInput = {
   orderType: PosOrderType;
   tableId?: string | null;
   roomId?: string | null;
+  guestId?: string | null;
+  reservationId?: string | null;
   customerName?: string | null;
   notes?: string | null;
   discountAmount?: number;
   taxRate?: number;
-  status: "open" | "held" | "paid";
+  status: "open" | "held" | "pending" | "paid";
   items: Array<{
     productId: string | null;
     productName: string;

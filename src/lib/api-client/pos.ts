@@ -155,6 +155,10 @@ function mapOrder(row: Record<string, unknown>): PosOrder {
   return {
     id: String(row.id),
     orderNumber: String(row.order_number ?? ""),
+    callNumber:
+      row.call_number == null || row.call_number === ""
+        ? null
+        : Number(row.call_number),
     status: String(row.status ?? "open") as PosOrder["status"],
     orderType: String(row.order_type ?? "walk_in") as PosOrder["orderType"],
     tableId: (row.table_id as string | null) ?? null,
@@ -195,6 +199,36 @@ async function fetchOrderNumber(supabase: ReturnType<typeof createClient>) {
   const m = String(stamp.getMonth() + 1).padStart(2, "0");
   const d = String(stamp.getDate()).padStart(2, "0");
   return `POS-${y}${m}${d}-${String(Date.now()).slice(-4)}`;
+}
+
+/** Short daily number staff call out at the counter when an order is ready. */
+async function fetchCallNumber(supabase: ReturnType<typeof createClient>) {
+  const { data, error } = await supabase.rpc("next_pos_call_number");
+  if (!error && data != null) return Number(data);
+  // Fallback if migration not applied yet — still give a usable short number
+  return Number(String(Date.now()).slice(-3)) || 1;
+}
+
+async function ensureOrderCallNumber(
+  supabase: ReturnType<typeof createClient>,
+  orderId: string,
+  existing: number | null | undefined,
+  shouldAssign: boolean,
+): Promise<number | null> {
+  if (existing != null && Number.isFinite(existing) && existing > 0) {
+    return Number(existing);
+  }
+  if (!shouldAssign) return null;
+  const callNumber = await fetchCallNumber(supabase);
+  const { error } = await supabase
+    .from("pos_orders")
+    .update({ call_number: callNumber, updated_at: new Date().toISOString() })
+    .eq("id", orderId);
+  if (error) {
+    if (isMissingColumnError(error, "call_number")) return callNumber;
+    throw error;
+  }
+  return callNumber;
 }
 
 function calcTotals(
@@ -489,6 +523,7 @@ export function useCreatePosProduct() {
         sku: input.sku?.trim() || null,
         name: input.name.trim(),
         description: input.description ?? null,
+        image_url: input.imageUrl ?? null,
         price: input.price,
         cost: input.cost ?? 0,
         track_stock: input.trackStock ?? false,
@@ -507,6 +542,7 @@ export function useCreatePosProduct() {
             sku: input.sku?.trim() || null,
             name: input.name.trim(),
             description: input.description ?? null,
+            image_url: input.imageUrl ?? null,
             price: input.price,
             cost: input.cost ?? 0,
             track_stock: input.trackStock ?? false,
@@ -554,6 +590,7 @@ export function useUpdatePosProduct() {
       if (input.categoryId !== undefined) patch.category_id = input.categoryId;
       if (input.sku !== undefined) patch.sku = input.sku?.trim() || null;
       if (input.description !== undefined) patch.description = input.description;
+      if (input.imageUrl !== undefined) patch.image_url = input.imageUrl;
       if (input.price !== undefined) patch.price = input.price;
       if (input.cost !== undefined) patch.cost = input.cost;
       if (input.trackStock !== undefined) patch.track_stock = input.trackStock;
@@ -753,6 +790,13 @@ export function useSavePosOrder() {
       if (!input.items.length && input.status !== "held") {
         throw new Error("Add at least one item.");
       }
+      const isRoomCharge =
+        input.payment?.method === "room_charge" || input.orderType === "room_charge";
+      const closingSale = input.status === "paid" || input.status === "pending";
+      if (closingSale && isRoomCharge && !input.reservationId) {
+        throw new Error("Select an in-house guest / room to charge this order.");
+      }
+
       const supabase = createClient();
       const {
         data: { user },
@@ -765,64 +809,118 @@ export function useSavePosOrder() {
       const now = new Date().toISOString();
       let orderId = input.orderId ?? null;
 
+      // Room charge: billed to folio as pending until PMS checkout/payment settles it.
+      const finalStatus =
+        closingSale && isRoomCharge ? "pending" : input.status === "pending" ? "pending" : input.status;
+      const collectedOnOrder =
+        finalStatus === "paid" ? totals.totalAmount : 0;
+
+      const orderFields = {
+        status: finalStatus,
+        order_type: isRoomCharge ? "room_charge" : input.orderType,
+        table_id: input.tableId ?? null,
+        room_id: input.roomId ?? null,
+        guest_id: input.guestId ?? null,
+        reservation_id: input.reservationId ?? null,
+        customer_name: input.customerName ?? null,
+        notes: input.notes ?? null,
+        subtotal: totals.subtotal,
+        discount_amount: totals.discountAmount,
+        tax_amount: totals.taxAmount,
+        total_amount: totals.totalAmount,
+      };
+
+      const closingMeta =
+        finalStatus === "paid" || finalStatus === "pending"
+          ? {
+              paid_amount: collectedOnOrder,
+              closed_at: now,
+              closed_by: user?.id ?? null,
+            }
+          : {};
+
+      let assignedCallNumber: number | null = null;
+
       if (orderId) {
+        const { data: existingRow, error: existingErr } = await supabase
+          .from("pos_orders")
+          .select("call_number")
+          .eq("id", orderId)
+          .maybeSingle();
+        if (existingErr && !isMissingColumnError(existingErr, "call_number")) {
+          throw existingErr;
+        }
+
         const { error } = await supabase
           .from("pos_orders")
           .update({
-            status: input.status,
-            order_type: input.orderType,
-            table_id: input.tableId ?? null,
-            room_id: input.roomId ?? null,
-            customer_name: input.customerName ?? null,
-            notes: input.notes ?? null,
-            subtotal: totals.subtotal,
-            discount_amount: totals.discountAmount,
-            tax_amount: totals.taxAmount,
-            total_amount: totals.totalAmount,
+            ...orderFields,
             updated_at: now,
-            ...(input.status === "paid"
-              ? {
-                  paid_amount: totals.totalAmount,
-                  closed_at: now,
-                  closed_by: user?.id ?? null,
-                }
-              : {}),
+            ...closingMeta,
           })
           .eq("id", orderId);
         if (error) throw error;
         await replaceOrderItems(supabase, orderId, input.items);
+
+        const needsCall =
+          finalStatus === "held" ||
+          finalStatus === "paid" ||
+          finalStatus === "pending";
+        assignedCallNumber = await ensureOrderCallNumber(
+          supabase,
+          orderId,
+          existingRow?.call_number != null
+            ? Number(existingRow.call_number)
+            : null,
+          needsCall,
+        );
       } else {
         orderId = newId();
         const orderNumber = await fetchOrderNumber(supabase);
-        const { error } = await supabase.from("pos_orders").insert({
+        const needsCall =
+          finalStatus === "held" ||
+          finalStatus === "paid" ||
+          finalStatus === "pending";
+        let callNumber: number | null = null;
+        if (needsCall) {
+          callNumber = await fetchCallNumber(supabase);
+        }
+        const insertRow: Record<string, unknown> = {
           id: orderId,
           order_number: orderNumber,
-          status: input.status,
-          order_type: input.orderType,
-          table_id: input.tableId ?? null,
-          room_id: input.roomId ?? null,
-          customer_name: input.customerName ?? null,
-          notes: input.notes ?? null,
-          subtotal: totals.subtotal,
-          discount_amount: totals.discountAmount,
-          tax_amount: totals.taxAmount,
-          total_amount: totals.totalAmount,
-          paid_amount: input.status === "paid" ? totals.totalAmount : 0,
+          ...orderFields,
+          paid_amount: collectedOnOrder,
           opened_by: user?.id ?? null,
-          closed_by: input.status === "paid" ? user?.id ?? null : null,
-          closed_at: input.status === "paid" ? now : null,
+          closed_by:
+            finalStatus === "paid" || finalStatus === "pending" ? user?.id ?? null : null,
+          closed_at:
+            finalStatus === "paid" || finalStatus === "pending" ? now : null,
           opened_at: now,
-        });
-        if (error) throw error;
+        };
+        if (callNumber != null) insertRow.call_number = callNumber;
+
+        const { error } = await supabase.from("pos_orders").insert(insertRow);
+        if (error) {
+          if (callNumber != null && isMissingColumnError(error, "call_number")) {
+            delete insertRow.call_number;
+            const { error: retryErr } = await supabase
+              .from("pos_orders")
+              .insert(insertRow);
+            if (retryErr) throw retryErr;
+          } else {
+            throw error;
+          }
+        }
         await replaceOrderItems(supabase, orderId, input.items);
+        assignedCallNumber = callNumber;
       }
 
       if (input.tableId) {
         const tableStatus =
-          input.status === "paid" || input.status === "held"
-            ? input.status === "paid"
-              ? "dirty"
-              : "occupied"
+          finalStatus === "paid" || finalStatus === "pending" || finalStatus === "held"
+            ? finalStatus === "held"
+              ? "occupied"
+              : "dirty"
             : "occupied";
         await supabase
           .from("pos_tables")
@@ -833,26 +931,107 @@ export function useSavePosOrder() {
           .eq("id", input.tableId);
       }
 
-      if (input.status === "paid" && input.payment) {
+      if (closingSale && input.payment) {
         const { error: payErr } = await supabase.from("pos_payments").insert({
           id: newId(),
           order_id: orderId,
           amount: input.payment.amount,
-          method: input.payment.method,
+          method: isRoomCharge ? "room_charge" : input.payment.method,
           reference_no: input.payment.referenceNo ?? null,
-          note: input.payment.note ?? null,
+          note:
+            input.payment.note ??
+            (isRoomCharge ? "Charged to guest room · pending until checkout" : null),
           received_by: user?.id ?? null,
         });
         if (payErr) throw payErr;
         await adjustStock(supabase, input.items, "decrement", orderId);
+
+        if (isRoomCharge && input.reservationId) {
+          const { data: res, error: resErr } = await supabase
+            .from("reservations")
+            .select("total_amount, paid_amount")
+            .eq("id", input.reservationId)
+            .maybeSingle();
+          if (resErr) throw resErr;
+          if (res) {
+            const nextTotal =
+              Math.round((Number(res.total_amount ?? 0) + totals.totalAmount) * 100) / 100;
+            const { error: bumpErr } = await supabase
+              .from("reservations")
+              .update({
+                total_amount: nextTotal,
+                updated_at: now,
+              })
+              .eq("id", input.reservationId);
+            if (bumpErr) throw bumpErr;
+          }
+        }
       }
 
-      return { orderId, ...totals };
+      return {
+        orderId,
+        ...totals,
+        roomCharge: isRoomCharge,
+        status: finalStatus,
+        callNumber: assignedCallNumber,
+      };
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["pos"] });
+      qc.invalidateQueries({ queryKey: ["reservations"] });
+      qc.invalidateQueries({ queryKey: ["payments"] });
     },
   });
+}
+
+/** Mark pending room-charge POS orders paid when the PMS stay bill is fully settled. */
+export async function settlePosRoomChargesForReservation(
+  reservationId: string,
+  client?: ReturnType<typeof createClient>,
+) {
+  if (!reservationId) return { settled: 0 };
+  const supabase = client ?? createClient();
+  const { data: res, error: resErr } = await supabase
+    .from("reservations")
+    .select("total_amount, paid_amount")
+    .eq("id", reservationId)
+    .maybeSingle();
+  if (resErr) throw resErr;
+  if (!res) return { settled: 0 };
+
+  const total = Number(res.total_amount ?? 0);
+  const paid = Number(res.paid_amount ?? 0);
+  if (paid + 0.001 < total) return { settled: 0 };
+
+  const { data: orders, error } = await supabase
+    .from("pos_orders")
+    .select("id, total_amount, status, paid_amount")
+    .eq("reservation_id", reservationId)
+    .eq("order_type", "room_charge")
+    .neq("status", "void")
+    .neq("status", "refunded");
+  if (error) throw error;
+
+  const now = new Date().toISOString();
+  let settled = 0;
+  for (const order of orders ?? []) {
+    const totalAmt = Number(order.total_amount ?? 0);
+    const paidAmt = Number(order.paid_amount ?? 0);
+    const needsSettle = order.status === "pending" || paidAmt + 0.001 < totalAmt;
+    if (!needsSettle) continue;
+    const { error: upErr } = await supabase
+      .from("pos_orders")
+      .update({
+        status: "paid",
+        paid_amount: totalAmt,
+        updated_at: now,
+        closed_at: now,
+      })
+      .eq("id", order.id);
+    if (upErr) throw upErr;
+    settled += 1;
+  }
+  return { settled };
 }
 
 export function useVoidPosOrder() {
@@ -873,6 +1052,44 @@ export function useVoidPosOrder() {
       }
 
       const now = new Date().toISOString();
+      const items = (order.pos_order_items ?? []) as Array<Record<string, unknown>>;
+      const wasPendingRoomCharge =
+        order.status === "pending" ||
+        (order.order_type === "room_charge" && Number(order.paid_amount ?? 0) < Number(order.total_amount ?? 0));
+
+      if (wasPendingRoomCharge && items.length) {
+        await adjustStock(
+          supabase,
+          items.map((item) => ({
+            productId: (item.product_id as string | null) ?? null,
+            productName: String(item.product_name ?? ""),
+            unitPrice: Number(item.unit_price ?? 0),
+            quantity: Number(item.quantity ?? 0),
+            notes: (item.notes as string | null) ?? null,
+          })),
+          "increment",
+          orderId,
+        );
+      }
+
+      if (wasPendingRoomCharge && order.reservation_id) {
+        const { data: res } = await supabase
+          .from("reservations")
+          .select("total_amount")
+          .eq("id", order.reservation_id)
+          .maybeSingle();
+        if (res) {
+          const nextTotal = Math.max(
+            0,
+            Math.round((Number(res.total_amount ?? 0) - Number(order.total_amount ?? 0)) * 100) / 100,
+          );
+          await supabase
+            .from("reservations")
+            .update({ total_amount: nextTotal, updated_at: now })
+            .eq("id", order.reservation_id);
+        }
+      }
+
       const { error } = await supabase
         .from("pos_orders")
         .update({ status: "void", closed_at: now, updated_at: now })
@@ -886,7 +1103,10 @@ export function useVoidPosOrder() {
           .eq("id", order.table_id);
       }
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["pos"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["pos"] });
+      qc.invalidateQueries({ queryKey: ["reservations"] });
+    },
   });
 }
 

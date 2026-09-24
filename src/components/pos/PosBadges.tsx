@@ -6,6 +6,7 @@ import type { PosOrderStatus, PosTableStatus } from "@/lib/api-client/pos-types"
 const orderStatusClass: Record<PosOrderStatus, string> = {
   open: "bg-sky-500/15 text-sky-700 dark:text-sky-300 border-sky-500/30",
   held: "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30",
+  pending: "bg-orange-500/15 text-orange-700 dark:text-orange-300 border-orange-500/30",
   paid: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30",
   void: "bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/30",
   refunded: "bg-violet-500/15 text-violet-700 dark:text-violet-300 border-violet-500/30",

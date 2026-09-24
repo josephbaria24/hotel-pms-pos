@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
   AlertTriangle,
@@ -13,6 +13,8 @@ import {
   Flag,
   FolderOpen,
   Layers,
+  ImagePlus,
+  Loader2,
   MinusCircle,
   Package,
   PackageCheck,
@@ -81,6 +83,10 @@ import {
 } from "@/lib/api-client/pos";
 import type { PosProduct } from "@/lib/api-client/pos-types";
 import { inventoryStatus } from "@/lib/pos-inventory";
+import {
+  deleteProductImage,
+  uploadProductImage,
+} from "@/lib/pos-product-images";
 import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 10;
@@ -153,6 +159,7 @@ type FormState = {
   name: string;
   categoryId: string;
   sku: string;
+  imageUrl: string | null;
   price: string;
   cost: string;
   trackStock: boolean;
@@ -165,6 +172,7 @@ const emptyForm: FormState = {
   name: "",
   categoryId: "none",
   sku: "",
+  imageUrl: null,
   price: "",
   cost: "",
   trackStock: false,
@@ -191,6 +199,18 @@ export function PosProductsView() {
   const [editing, setEditing] = useState<PosProduct | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
   const [deleting, setDeleting] = useState<PosProduct | null>(null);
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [imageBusy, setImageBusy] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const objectUrlRef = useRef<string | null>(null);
+
+  const clearObjectUrl = () => {
+    if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+    objectUrlRef.current = null;
+  };
+
+  useEffect(() => () => clearObjectUrl(), []);
 
   const categoryOptions = useMemo(() => {
     const seen = new Set<string>();
@@ -271,17 +291,22 @@ export function PosProductsView() {
   };
 
   const openCreate = () => {
+    clearObjectUrl();
     setEditing(null);
     setForm(emptyForm);
+    setImageFile(null);
+    setImagePreview(null);
     setOpen(true);
   };
 
   const openEdit = (p: PosProduct) => {
+    clearObjectUrl();
     setEditing(p);
     setForm({
       name: p.name,
       categoryId: resolveCategoryId(p),
       sku: p.sku ?? "",
+      imageUrl: p.imageUrl,
       price: String(p.price),
       cost: String(p.cost),
       trackStock: p.trackStock,
@@ -289,7 +314,41 @@ export function PosProductsView() {
       isActive: p.isActive,
       isQuickSell: p.isQuickSell,
     });
+    setImageFile(null);
+    setImagePreview(p.imageUrl);
     setOpen(true);
+  };
+
+  const chooseImage = (file?: File) => {
+    if (!file) return;
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+      toast({ title: "Choose a JPG, PNG, or WebP image", variant: "destructive" });
+      return;
+    }
+    if (file.size > 12 * 1024 * 1024) {
+      toast({ title: "Image is too large", description: "Maximum source size is 12 MB.", variant: "destructive" });
+      return;
+    }
+    clearObjectUrl();
+    const preview = URL.createObjectURL(file);
+    objectUrlRef.current = preview;
+    setImageFile(file);
+    setImagePreview(preview);
+  };
+
+  const removeImage = () => {
+    clearObjectUrl();
+    setImageFile(null);
+    setImagePreview(null);
+    setForm((f) => ({ ...f, imageUrl: null }));
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const closeEditor = () => {
+    if (imageBusy) return;
+    clearObjectUrl();
+    setImageFile(null);
+    setOpen(false);
   };
 
   const save = async () => {
@@ -297,18 +356,24 @@ export function PosProductsView() {
       toast({ title: "Name is required", variant: "destructive" });
       return;
     }
-    const payload = {
+    setImageBusy(true);
+    let uploadedUrl: string | null = null;
+    const oldUrl = editing?.imageUrl ?? null;
+    try {
+      if (imageFile) uploadedUrl = await uploadProductImage(imageFile);
+      const nextImageUrl = uploadedUrl ?? form.imageUrl;
+      const payload = {
       name: form.name,
       categoryId: form.categoryId === "none" ? null : form.categoryId,
       sku: form.sku || null,
+      imageUrl: nextImageUrl,
       price: Number(form.price) || 0,
       cost: Number(form.cost) || 0,
       trackStock: form.trackStock,
       stockQty: Number(form.stockQty) || 0,
       isActive: form.isActive,
       isQuickSell: form.isQuickSell,
-    };
-    try {
+      };
       if (editing) {
         await updateProduct.mutateAsync({ id: editing.id, ...payload });
         toast({ title: "Product updated" });
@@ -316,13 +381,23 @@ export function PosProductsView() {
         await createProduct.mutateAsync(payload);
         toast({ title: "Product created" });
       }
+      if (oldUrl && oldUrl !== nextImageUrl) {
+        await deleteProductImage(oldUrl).catch(() => {
+          toast({ title: "Product saved", description: "The old image could not be removed from storage." });
+        });
+      }
+      clearObjectUrl();
+      setImageFile(null);
       setOpen(false);
     } catch (err) {
+      if (uploadedUrl) await deleteProductImage(uploadedUrl).catch(() => undefined);
       toast({
         title: "Save failed",
         description: err instanceof Error ? err.message : "Unknown error",
         variant: "destructive",
       });
+    } finally {
+      setImageBusy(false);
     }
   };
 
@@ -330,6 +405,9 @@ export function PosProductsView() {
     if (!deleting) return;
     try {
       await deleteProduct.mutateAsync(deleting.id);
+      await deleteProductImage(deleting.imageUrl).catch(() => {
+        toast({ title: "Product deleted", description: "Its image could not be removed from storage." });
+      });
       toast({ title: "Product deleted" });
       setDeleting(null);
     } catch (err) {
@@ -526,11 +604,27 @@ export function PosProductsView() {
                 return (
                   <TableRow key={p.id} className={cn(!p.isActive && "bg-muted/30")}>
                     <TableCell>
-                      <div className={cn("font-medium", !p.isActive && "text-muted-foreground")}>
-                        {p.name}
-                      </div>
-                      <div className="font-mono text-[11px] text-muted-foreground">
-                        {p.sku || "No SKU"}
+                      <div className="flex items-center gap-2.5">
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-muted/40">
+                          {p.imageUrl ? (
+                            <img
+                              src={p.imageUrl}
+                              alt=""
+                              className="h-full w-full object-cover"
+                              loading="lazy"
+                            />
+                          ) : (
+                            <Package className="h-4 w-4 text-muted-foreground" />
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <div className={cn("truncate font-medium", !p.isActive && "text-muted-foreground")}>
+                            {p.name}
+                          </div>
+                          <div className="font-mono text-[11px] text-muted-foreground">
+                            {p.sku || "No SKU"}
+                          </div>
+                        </div>
                       </div>
                     </TableCell>
                     <TableCell className="text-muted-foreground">
@@ -652,12 +746,76 @@ export function PosProductsView() {
         </div>
       )}
 
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog
+        open={open}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen && !imageBusy) {
+            clearObjectUrl();
+            setImageFile(null);
+            setOpen(false);
+          } else if (nextOpen) {
+            setOpen(true);
+          }
+        }}
+      >
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>{editing ? "Edit product" : "New product"}</DialogTitle>
           </DialogHeader>
           <div className="grid gap-3 py-2 sm:grid-cols-2">
+            <div className="space-y-2 sm:col-span-2">
+              <Label>Product image</Label>
+              <div className="flex items-center gap-3 rounded-xl border bg-muted/20 p-3">
+                <div className="flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-xl border bg-background">
+                  {imagePreview ? (
+                    <img
+                      src={imagePreview}
+                      alt="Product preview"
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <ImagePlus className="h-8 w-8 text-muted-foreground" />
+                  )}
+                </div>
+                <div className="min-w-0 space-y-2">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    className="hidden"
+                    onChange={(event) => chooseImage(event.target.files?.[0])}
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={imageBusy}
+                    >
+                      <ImagePlus className="mr-1.5 h-4 w-4" />
+                      {imagePreview ? "Replace photo" : "Upload photo"}
+                    </Button>
+                    {imagePreview ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="text-destructive"
+                        onClick={removeImage}
+                        disabled={imageBusy}
+                      >
+                        <Trash2 className="mr-1.5 h-4 w-4" />
+                        Remove
+                      </Button>
+                    ) : null}
+                  </div>
+                  <p className="text-[11px] leading-relaxed text-muted-foreground">
+                    JPG, PNG, or WebP up to 12 MB. Saved as compressed WebP (max 1200 px).
+                  </p>
+                </div>
+              </div>
+            </div>
             <div className="space-y-1.5 sm:col-span-2">
               <Label>Name</Label>
               <Input
@@ -753,15 +911,16 @@ export function PosProductsView() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setOpen(false)}>
+            <Button variant="outline" onClick={closeEditor} disabled={imageBusy}>
               Cancel
             </Button>
             <Button
               className="bg-teal-600 hover:bg-teal-700"
               onClick={save}
-              disabled={createProduct.isPending || updateProduct.isPending}
+              disabled={createProduct.isPending || updateProduct.isPending || imageBusy}
             >
-              Save
+              {imageBusy ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}
+              {imageBusy ? "Saving…" : "Save"}
             </Button>
           </DialogFooter>
         </DialogContent>

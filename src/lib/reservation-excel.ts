@@ -1,4 +1,5 @@
 import type { Guest, Payment, Reservation, Room } from "@/lib/api-client/types";
+import type { PosOrder } from "@/lib/api-client/pos-types";
 import { ymdPh } from "@/lib/datetime";
 import {
   excelEmptyRow,
@@ -12,6 +13,7 @@ import {
   styleExcelHeader,
   type ExcelHotel,
 } from "@/lib/excel-report";
+import { appendPosToPaymentDetails, formatPosChargeSummary, posOrdersForReservation } from "@/lib/pos-folio";
 import {
   paymentMethodLabel,
   remainingBalance,
@@ -42,6 +44,8 @@ export type ReservationExcelRow = {
   depositAmount: number;
   remainingBalance: number;
   paymentMode: string;
+  paymentDetails: string;
+  posCharges: string;
   source: string;
   notes: string;
 };
@@ -103,6 +107,7 @@ export function buildReservationExcelRows(
   guests: Guest[],
   rooms: Room[],
   payments: Payment[],
+  posOrders: PosOrder[] = [],
 ): ReservationExcelRow[] {
   const guestById = new Map(guests.map((g) => [g.id, g]));
   const roomById = new Map(rooms.map((r) => [r.id, r]));
@@ -118,6 +123,20 @@ export function buildReservationExcelRows(
       .replace(/\b\w/g, (c) => c.toUpperCase()) || roomNumber || "—";
     const paid = Number(res.paidAmount || 0);
     const total = Number(res.totalAmount || 0);
+    const linkedPos = posOrdersForReservation(posOrders, res.id);
+    const paymentMode = latestPaymentMethod(res.id, payments) || "—";
+    const paymentDetails = appendPosToPaymentDetails(
+      [
+        reservationPaymentStatus(total, paid),
+        `Total ₱${total.toLocaleString("en-PH", { minimumFractionDigits: 2 })}`,
+        `Paid ₱${paid.toLocaleString("en-PH", { minimumFractionDigits: 2 })}`,
+        `Balance ₱${remainingBalance(total, paid).toLocaleString("en-PH", { minimumFractionDigits: 2 })}`,
+        paymentMode !== "—" ? paymentMode : "",
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      linkedPos,
+    );
     return {
       reservationNumber: res.reservationNumber || "—",
       guestName: res.guestName || guest?.fullName || "—",
@@ -140,7 +159,9 @@ export function buildReservationExcelRows(
       requiredDeposit: requiredDeposit(total),
       depositAmount: paid,
       remainingBalance: remainingBalance(total, paid),
-      paymentMode: latestPaymentMethod(res.id, payments) || "—",
+      paymentMode,
+      paymentDetails,
+      posCharges: formatPosChargeSummary(linkedPos) || "—",
       source: String(res.source || "").trim() || "—",
       notes: String(res.notes || "").trim() || "—",
     };
@@ -191,6 +212,7 @@ export async function downloadReservationsExcel(input: {
   guests: Guest[];
   rooms: Room[];
   payments: Payment[];
+  posOrders?: PosOrder[];
   hotel?: ExcelHotel;
   filename: string;
   subtitle?: string;
@@ -209,7 +231,13 @@ export async function downloadReservationsExcel(input: {
   const reservations = [...input.reservations].sort((a, b) =>
     String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? "")),
   );
-  const rows = buildReservationExcelRows(reservations, input.guests, input.rooms, input.payments);
+  const rows = buildReservationExcelRows(
+    reservations,
+    input.guests,
+    input.rooms,
+    input.payments,
+    input.posOrders ?? [],
+  );
   const ids = new Set(reservations.map((r) => r.id));
   const guestIds = new Set(reservations.map((r) => r.guestId).filter(Boolean));
   const roomIds = new Set(reservations.map((r) => r.roomId).filter(Boolean));
@@ -427,6 +455,8 @@ export async function downloadReservationsExcel(input: {
     { header: "Amount Paid", width: 14 },
     { header: "Remaining Balance", width: 16 },
     { header: "Mode of Payment", width: 18 },
+    { header: "Payment Details", width: 48 },
+    { header: "POS Room Charges", width: 36 },
     { header: "Source", width: 14 },
     { header: "Notes", width: 28 },
   ];
@@ -458,6 +488,8 @@ export async function downloadReservationsExcel(input: {
         row.depositAmount,
         row.remainingBalance,
         row.paymentMode,
+        row.paymentDetails,
+        row.posCharges,
         row.source,
         row.notes,
       ];
@@ -470,6 +502,8 @@ export async function downloadReservationsExcel(input: {
       moneyFmt(r.getCell(18));
       moneyFmt(r.getCell(19));
       moneyFmt(r.getCell(20));
+      r.getCell(22).alignment = { vertical: "middle", wrapText: true };
+      r.getCell(23).alignment = { vertical: "middle", wrapText: true };
       const stay = stayFill(row.reservationStatus);
       styleExcelChip(r.getCell(15), stay.bg, stay.fg);
       const pay = payFill(row.paymentStatus);

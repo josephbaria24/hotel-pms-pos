@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
+  Hash,
   Minus,
   Plus,
   Search,
@@ -10,6 +11,9 @@ import {
   Trash2,
   Pause,
   CreditCard,
+  BedDouble,
+  UserRound,
+  X,
 } from "lucide-react";
 import { PosPageShell } from "@/components/pos/PosPageShell";
 import { Button } from "@/components/ui/button";
@@ -38,7 +42,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { useGetSettings, useListRooms } from "@/lib/api-client";
+import { useGetSettings, useListReservations } from "@/lib/api-client";
+import type { Reservation } from "@/lib/api-client/types";
 import {
   formatPeso,
   usePosCategories,
@@ -69,7 +74,7 @@ export function PosRegisterView() {
   const { data: products = [], isLoading: productsLoading } = usePosProducts();
   const { data: categories = [] } = usePosCategories();
   const { data: tables = [] } = usePosTables();
-  const { data: rooms = [] } = useListRooms();
+  const { data: reservations = [] } = useListReservations();
 
   const uniqueTables = useMemo(() => {
     const seen = new Set<string>();
@@ -82,16 +87,17 @@ export function PosRegisterView() {
     });
   }, [tables]);
 
-  const uniqueRooms = useMemo(() => {
-    const seen = new Set<string>();
-    return rooms.filter((r) => {
-      if (!r.id?.trim()) return false;
-      const key = r.roomNumber.trim().toLowerCase();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-  }, [rooms]);
+  const inHouseStays = useMemo(
+    () =>
+      reservations
+        .filter((r) => r.status === "checked_in")
+        .sort(
+          (a, b) =>
+            a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true }) ||
+            a.guestName.localeCompare(b.guestName),
+        ),
+    [reservations],
+  );
 
   const uniqueCategories = useMemo(() => {
     const seen = new Set<string>();
@@ -114,15 +120,61 @@ export function PosRegisterView() {
   const [orderType, setOrderType] = useState<PosOrderType>("walk_in");
   const [tableId, setTableId] = useState<string>("");
   const [roomId, setRoomId] = useState<string>("");
+  const [guestId, setGuestId] = useState<string>("");
+  const [reservationId, setReservationId] = useState<string>("");
   const [customerName, setCustomerName] = useState("");
+  const [guestQuery, setGuestQuery] = useState("");
   const [discount, setDiscount] = useState<number | "">("");
   const [notes, setNotes] = useState("");
   const [chargeOpen, setChargeOpen] = useState(false);
+  const [callTicket, setCallTicket] = useState<{
+    callNumber: number;
+    totalAmount: number;
+    status: string;
+    roomCharge: boolean;
+  } | null>(null);
+  const [settleMode, setSettleMode] = useState<"pay_now" | "room_charge">("pay_now");
   const [payMethod, setPayMethod] = useState<PosPaymentMethod>("cash");
   const [payRef, setPayRef] = useState("");
   const [cashTendered, setCashTendered] = useState("");
 
   const taxRate = Number(settings?.taxRate ?? 0);
+
+  const selectedStay = useMemo(
+    () => inHouseStays.find((r) => r.id === reservationId) ?? null,
+    [inHouseStays, reservationId],
+  );
+
+  const filteredStays = useMemo(() => {
+    const q = guestQuery.trim().toLowerCase();
+    if (!q) return inHouseStays;
+    return inHouseStays.filter(
+      (r) =>
+        r.guestName.toLowerCase().includes(q) ||
+        String(r.roomNumber).toLowerCase().includes(q) ||
+        r.reservationNumber.toLowerCase().includes(q),
+    );
+  }, [inHouseStays, guestQuery]);
+
+  const linkStay = (res: Reservation) => {
+    setReservationId(res.id);
+    setGuestId(res.guestId);
+    setRoomId(res.roomId);
+    setCustomerName(res.guestName);
+    setGuestQuery("");
+    if (settleMode === "room_charge" || orderType === "room_charge") {
+      setOrderType("room_charge");
+      setSettleMode("room_charge");
+      setPayMethod("room_charge");
+    }
+  };
+
+  const clearStayLink = () => {
+    setReservationId("");
+    setGuestId("");
+    setRoomId("");
+    setGuestQuery("");
+  };
 
   useEffect(() => {
     if (!resumeOrder) return;
@@ -130,11 +182,18 @@ export function PosRegisterView() {
     setOrderType(resumeOrder.orderType);
     setTableId(resumeOrder.tableId ?? "");
     setRoomId(resumeOrder.roomId ?? "");
+    setGuestId(resumeOrder.guestId ?? "");
+    setReservationId(resumeOrder.reservationId ?? "");
     setCustomerName(resumeOrder.customerName ?? "");
     setDiscount(
       resumeOrder.discountAmount === 0 ? "" : resumeOrder.discountAmount,
     );
     setNotes(resumeOrder.notes ?? "");
+    if (resumeOrder.orderType === "room_charge" || resumeOrder.reservationId) {
+      setSettleMode(
+        resumeOrder.orderType === "room_charge" ? "room_charge" : "pay_now",
+      );
+    }
     setCart(
       resumeOrder.items.map((item) => ({
         key: lineKey(item.productId, item.productName),
@@ -230,6 +289,12 @@ export function PosRegisterView() {
     setDiscount("");
     setNotes("");
     setCustomerName("");
+    setGuestId("");
+    setReservationId("");
+    setRoomId("");
+    setGuestQuery("");
+    setSettleMode("pay_now");
+    setPayMethod("cash");
     setCashTendered("");
     setPayRef("");
     if (resumeId || tableParam) router.replace("/pos");
@@ -249,17 +314,31 @@ export function PosRegisterView() {
       toast({ title: "Cart is empty", variant: "destructive" });
       return;
     }
+    const chargingRoom =
+      withPayment && (settleMode === "room_charge" || payMethod === "room_charge");
+    if (chargingRoom && !reservationId) {
+      toast({
+        title: "Select an in-house guest",
+        description: "Room charge posts to a checked-in reservation folio.",
+        variant: "destructive",
+      });
+      return;
+    }
     try {
+      const effectiveType: PosOrderType = chargingRoom
+        ? "room_charge"
+        : orderType === "dine_in" && !tableId
+          ? "walk_in"
+          : orderType === "room_charge" && !reservationId
+            ? "walk_in"
+            : orderType;
       const result = await saveOrder.mutateAsync({
         orderId,
-        orderType:
-          orderType === "dine_in" && !tableId
-            ? "walk_in"
-            : orderType === "room_charge" && !roomId
-              ? "walk_in"
-              : orderType,
+        orderType: effectiveType,
         tableId: tableId || null,
         roomId: roomId || null,
+        guestId: guestId || null,
+        reservationId: reservationId || null,
         customerName: customerName.trim() || null,
         notes: notes.trim() || null,
         discountAmount: discountClamped,
@@ -269,26 +348,46 @@ export function PosRegisterView() {
         payment: withPayment
           ? {
               amount: total,
-              method: payMethod,
+              method: chargingRoom ? "room_charge" : payMethod,
               referenceNo: payRef.trim() || null,
             }
           : null,
       });
-      toast({
-        title:
-          status === "paid"
-            ? "Sale completed"
-            : status === "held"
-              ? "Order held"
-              : "Order saved",
-        description: formatPeso(result.totalAmount),
-      });
-      if (status === "paid" || status === "held") {
+
+      const callNo =
+        result.callNumber != null && Number(result.callNumber) > 0
+          ? Number(result.callNumber)
+          : null;
+
+      if (callNo != null && (status === "paid" || status === "held" || result.status === "pending")) {
         setChargeOpen(false);
         clearTicket();
-        if (status === "held") router.push("/pos/orders");
+        setCallTicket({
+          callNumber: callNo,
+          totalAmount: result.totalAmount,
+          status: result.status,
+          roomCharge: Boolean(result.roomCharge),
+        });
       } else {
-        setOrderId(result.orderId);
+        toast({
+          title: chargingRoom
+            ? "Charged to room (pending)"
+            : status === "paid"
+              ? "Sale completed"
+              : status === "held"
+                ? "Order held"
+                : "Order saved",
+          description: chargingRoom
+            ? `${formatPeso(result.totalAmount)} on guest folio — marked paid after PMS checkout`
+            : formatPeso(result.totalAmount),
+        });
+        if (status === "paid" || status === "held" || result.status === "pending") {
+          setChargeOpen(false);
+          clearTicket();
+          if (status === "held") router.push("/pos/orders");
+        } else {
+          setOrderId(result.orderId);
+        }
       }
     } catch (err) {
       toast({
@@ -302,7 +401,7 @@ export function PosRegisterView() {
   return (
     <PosPageShell
       title="Register"
-      description="Ring up walk-in sales, room charges, and F&B orders."
+      description="Ring up sales, assign a call number, and have customers pick up at the counter."
       icon={ShoppingCart}
     >
       <div className="grid gap-3 pb-20 xl:grid-cols-[1.55fr_1fr] xl:gap-4 xl:pb-0">
@@ -363,6 +462,16 @@ export function PosRegisterView() {
                     out && "opacity-55",
                   )}
                 >
+                  {product.imageUrl ? (
+                    <div className="-mx-0.5 mb-2 h-20 overflow-hidden rounded-lg border border-black/10 bg-white/50 sm:h-24">
+                      <img
+                        src={product.imageUrl}
+                        alt=""
+                        className="h-full w-full object-cover"
+                        loading="lazy"
+                      />
+                    </div>
+                  ) : null}
                   <div className="line-clamp-2 text-[13px] font-semibold leading-snug sm:text-sm">
                     {product.name}
                   </div>
@@ -414,7 +523,14 @@ export function PosRegisterView() {
                 <Label>Order type</Label>
                 <Select
                   value={orderType}
-                  onValueChange={(v) => setOrderType(v as PosOrderType)}
+                  onValueChange={(v) => {
+                    const next = v as PosOrderType;
+                    setOrderType(next);
+                    if (next === "room_charge") {
+                      setSettleMode("room_charge");
+                      setPayMethod("room_charge");
+                    }
+                  }}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select order type" />
@@ -427,13 +543,77 @@ export function PosRegisterView() {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-1.5">
-                <Label>Customer</Label>
-                <Input
-                  value={customerName}
-                  onChange={(e) => setCustomerName(e.target.value)}
-                  placeholder="Optional name"
-                />
+              <div className="space-y-1.5 sm:col-span-2">
+                <Label>Guest / customer</Label>
+                {selectedStay ? (
+                  <div className="flex items-start gap-2 rounded-lg border border-teal-700/20 bg-teal-50/70 px-3 py-2 dark:bg-teal-950/40">
+                    <UserRound className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium">{selectedStay.guestName}</p>
+                      <p className="text-[11px] text-muted-foreground">
+                        Room {selectedStay.roomNumber} · {selectedStay.reservationNumber} · In-house
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="ghost"
+                      className="h-7 w-7 shrink-0"
+                      onClick={() => {
+                        clearStayLink();
+                        setCustomerName("");
+                      }}
+                      title="Clear guest"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="relative">
+                      <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                      <Input
+                        value={guestQuery || customerName}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setGuestQuery(v);
+                          setCustomerName(v);
+                          if (reservationId) clearStayLink();
+                        }}
+                        placeholder="Search in-house guest or type a name"
+                        className="pl-8"
+                      />
+                    </div>
+                    {inHouseStays.length === 0 ? (
+                      <p className="text-[11px] text-muted-foreground">
+                        No checked-in guests right now. You can still enter a walk-in name.
+                      </p>
+                    ) : (
+                      <div className="max-h-36 overflow-y-auto rounded-md border bg-background">
+                        {filteredStays.length === 0 ? (
+                          <p className="px-3 py-2 text-xs text-muted-foreground">No matching in-house guests</p>
+                        ) : (
+                          filteredStays.slice(0, 12).map((res) => (
+                            <button
+                              key={res.id}
+                              type="button"
+                              className="flex w-full items-start gap-2 border-b px-3 py-2 text-left last:border-b-0 hover:bg-muted/50"
+                              onClick={() => linkStay(res)}
+                            >
+                              <BedDouble className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                              <span className="min-w-0">
+                                <span className="block truncate text-sm font-medium">{res.guestName}</span>
+                                <span className="block text-[11px] text-muted-foreground">
+                                  Room {res.roomNumber} · {res.reservationNumber}
+                                </span>
+                              </span>
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
               {orderType === "dine_in" && (
                 <div className="space-y-1.5 sm:col-span-2">
@@ -447,31 +627,9 @@ export function PosRegisterView() {
                         <SelectItemText>No table</SelectItemText>
                       </SelectItem>
                       {uniqueTables.map((t) => (
-                          <SelectItem key={t.id} value={t.id}>
-                            <SelectItemText>
-                              {t.name} · {t.zone} ({t.status})
-                            </SelectItemText>
-                          </SelectItem>
-                        ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
-              {orderType === "room_charge" && (
-                <div className="space-y-1.5 sm:col-span-2">
-                  <Label>Room</Label>
-                  <Select value={roomId || "none"} onValueChange={(v) => setRoomId(v === "none" ? "" : v)}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select room" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">
-                        <SelectItemText>No room</SelectItemText>
-                      </SelectItem>
-                      {uniqueRooms.map((r) => (
-                        <SelectItem key={r.id} value={r.id}>
+                        <SelectItem key={t.id} value={t.id}>
                           <SelectItemText>
-                            Room {r.roomNumber} · {r.status}
+                            {t.name} · {t.zone} ({t.status})
                           </SelectItemText>
                         </SelectItem>
                       ))}
@@ -630,8 +788,12 @@ export function PosRegisterView() {
                       className="w-full bg-teal-600 hover:bg-teal-700"
                       disabled={!cart.length || saveOrder.isPending}
                       onClick={() => {
-                        if (orderType === "room_charge") {
-                          setPayMethod("room_charge");
+                        if (orderType === "room_charge" || reservationId) {
+                          // keep current settle mode; default room charge when type says so
+                          if (orderType === "room_charge") {
+                            setSettleMode("room_charge");
+                            setPayMethod("room_charge");
+                          }
                         }
                         setChargeOpen(true);
                       }}
@@ -642,7 +804,7 @@ export function PosRegisterView() {
                   </span>
                 </TooltipTrigger>
                 <TooltipContent>
-                  Take payment and complete this order
+                  Pay now or charge to an in-house guest room
                 </TooltipContent>
               </Tooltip>
             </div>
@@ -670,7 +832,10 @@ export function PosRegisterView() {
             className="h-11 flex-1 bg-teal-600 hover:bg-teal-700"
             disabled={!cart.length || saveOrder.isPending}
             onClick={() => {
-              if (orderType === "room_charge") setPayMethod("room_charge");
+              if (orderType === "room_charge") {
+                setSettleMode("room_charge");
+                setPayMethod("room_charge");
+              }
               setChargeOpen(true);
             }}
           >
@@ -686,51 +851,107 @@ export function PosRegisterView() {
             <DialogTitle>Charge {formatPeso(total)}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-2">
-            <div className="space-y-1.5">
-              <Label>Payment method</Label>
-              <Select
-                value={payMethod}
-                onValueChange={(v) => setPayMethod(v as PosPaymentMethod)}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="cash">Cash</SelectItem>
-                  <SelectItem value="card">Card</SelectItem>
-                  <SelectItem value="gcash">GCash</SelectItem>
-                  <SelectItem value="maya">Maya</SelectItem>
-                  <SelectItem value="bank_transfer">Bank transfer</SelectItem>
-                  <SelectItem value="room_charge">Room charge</SelectItem>
-                  <SelectItem value="other">Other</SelectItem>
-                </SelectContent>
-              </Select>
+            <div className="space-y-2">
+              <Label>Settlement</Label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  className={cn(
+                    "rounded-xl border px-3 py-2.5 text-left text-sm transition-colors",
+                    settleMode === "pay_now"
+                      ? "border-teal-600 bg-teal-50 dark:bg-teal-950/50"
+                      : "border-border hover:bg-muted/40",
+                  )}
+                  onClick={() => {
+                    setSettleMode("pay_now");
+                    if (payMethod === "room_charge") setPayMethod("cash");
+                  }}
+                >
+                  <span className="block font-semibold">Pay now</span>
+                  <span className="block text-[11px] text-muted-foreground">Cash, card, e-wallet</span>
+                </button>
+                <button
+                  type="button"
+                  className={cn(
+                    "rounded-xl border px-3 py-2.5 text-left text-sm transition-colors",
+                    settleMode === "room_charge"
+                      ? "border-teal-600 bg-teal-50 dark:bg-teal-950/50"
+                      : "border-border hover:bg-muted/40",
+                  )}
+                  onClick={() => {
+                    setSettleMode("room_charge");
+                    setPayMethod("room_charge");
+                    setOrderType("room_charge");
+                  }}
+                >
+                  <span className="block font-semibold">Room charge</span>
+                  <span className="block text-[11px] text-muted-foreground">Pay at checkout</span>
+                </button>
+              </div>
             </div>
-            {payMethod === "cash" && (
-              <div className="space-y-1.5">
-                <Label>Cash tendered</Label>
-                <Input
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  value={cashTendered}
-                  onChange={(e) => setCashTendered(e.target.value)}
-                  placeholder={String(total)}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Change: {formatPeso(change)}
-                </p>
+
+            {settleMode === "room_charge" && (
+              <div className="rounded-lg border border-amber-500/30 bg-amber-50/80 px-3 py-2 text-xs text-amber-950 dark:bg-amber-950/30 dark:text-amber-100">
+                {selectedStay ? (
+                  <>
+                    Will post to <strong>{selectedStay.guestName}</strong> · Room{" "}
+                    {selectedStay.roomNumber}. Appears on guest folio and billing balance until
+                    checkout.
+                  </>
+                ) : (
+                  <>Select an in-house guest on the ticket before confirming a room charge.</>
+                )}
               </div>
             )}
-            {payMethod !== "cash" && (
-              <div className="space-y-1.5">
-                <Label>Reference no.</Label>
-                <Input
-                  value={payRef}
-                  onChange={(e) => setPayRef(e.target.value)}
-                  placeholder="Optional"
-                />
-              </div>
+
+            {settleMode === "pay_now" && (
+              <>
+                <div className="space-y-1.5">
+                  <Label>Payment method</Label>
+                  <Select
+                    value={payMethod === "room_charge" ? "cash" : payMethod}
+                    onValueChange={(v) => setPayMethod(v as PosPaymentMethod)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="cash">Cash</SelectItem>
+                      <SelectItem value="card">Card</SelectItem>
+                      <SelectItem value="gcash">GCash</SelectItem>
+                      <SelectItem value="maya">Maya</SelectItem>
+                      <SelectItem value="bank_transfer">Bank transfer</SelectItem>
+                      <SelectItem value="other">Other</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {payMethod === "cash" && (
+                  <div className="space-y-1.5">
+                    <Label>Cash tendered</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      value={cashTendered}
+                      onChange={(e) => setCashTendered(e.target.value)}
+                      placeholder={String(total)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Change: {formatPeso(change)}
+                    </p>
+                  </div>
+                )}
+                {payMethod !== "cash" && (
+                  <div className="space-y-1.5">
+                    <Label>Reference no.</Label>
+                    <Input
+                      value={payRef}
+                      onChange={(e) => setPayRef(e.target.value)}
+                      placeholder="Optional"
+                    />
+                  </div>
+                )}
+              </>
             )}
           </div>
           <DialogFooter className="flex-row justify-end gap-2 space-x-0 sm:space-x-0">
@@ -749,20 +970,76 @@ export function PosRegisterView() {
                     className="bg-teal-600 hover:bg-teal-700"
                     disabled={
                       saveOrder.isPending ||
-                      (payMethod === "cash" &&
+                      (settleMode === "room_charge" && !reservationId) ||
+                      (settleMode === "pay_now" &&
+                        payMethod === "cash" &&
                         cashTendered !== "" &&
                         tendered < total)
                     }
                     onClick={() => persist("paid", true)}
                   >
-                    {saveOrder.isPending ? "Processing…" : "Confirm payment"}
+                    {saveOrder.isPending
+                      ? "Processing…"
+                      : settleMode === "room_charge"
+                        ? "Charge to room"
+                        : "Confirm payment"}
                   </Button>
                 </span>
               </TooltipTrigger>
               <TooltipContent>
-                Finalize payment and mark the order as paid
+                {settleMode === "room_charge"
+                  ? "Post this sale to the guest folio for checkout"
+                  : "Finalize payment and mark the order as paid"}
               </TooltipContent>
             </Tooltip>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={callTicket != null}
+        onOpenChange={(open) => {
+          if (!open) {
+            const wasHeld = callTicket?.status === "held";
+            setCallTicket(null);
+            if (wasHeld) router.push("/pos/orders");
+          }
+        }}
+      >
+        <DialogContent className="max-w-sm text-center sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center justify-center gap-2 text-base">
+              <Hash className="h-4 w-4 text-teal-600" />
+              Call number
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <p className="text-sm text-muted-foreground">
+              Give this number to the customer. Call it when their order is ready at
+              the counter.
+            </p>
+            <div className="mx-auto flex h-28 w-28 items-center justify-center rounded-2xl border-2 border-teal-600/40 bg-teal-500/10 sm:h-32 sm:w-32">
+              <span className="text-5xl font-bold tabular-nums tracking-tight text-teal-700 dark:text-teal-300 sm:text-6xl">
+                {callTicket?.callNumber}
+              </span>
+            </div>
+            <p className="text-sm font-medium tabular-nums">
+              {callTicket ? formatPeso(callTicket.totalAmount) : null}
+              {callTicket?.roomCharge ? " · Room charge" : null}
+              {callTicket?.status === "held" ? " · Held / preparing" : null}
+            </p>
+          </div>
+          <DialogFooter className="sm:justify-center">
+            <Button
+              className="w-full bg-teal-600 hover:bg-teal-700 sm:w-auto"
+              onClick={() => {
+                const wasHeld = callTicket?.status === "held";
+                setCallTicket(null);
+                if (wasHeld) router.push("/pos/orders");
+              }}
+            >
+              Next order
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

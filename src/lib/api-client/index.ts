@@ -10,6 +10,7 @@ import { createClient } from "@/lib/supabase/client";
 import { todayYmdPh } from "@/lib/datetime";
 import { computeOccupancyCounts } from "@/lib/occupancy-stats";
 import { money, validateReservationPayment } from "@/lib/reservation-payment";
+import { settlePosRoomChargesForReservation } from "./pos";
 import {
   mapActivity,
   mapGuest,
@@ -29,6 +30,7 @@ import type {
   Guest,
   OperationMode,
   Payment,
+  ProgressSnapshot,
   Reservation,
   Room,
   RoomOptionKind,
@@ -54,6 +56,7 @@ const qk = {
   reservationReport: ["reservation-report"] as const,
   classroom: ["admin", "classroom"] as const,
   operationMode: ["admin", "operation-mode"] as const,
+  progressSnapshots: ["admin", "progress-snapshots"] as const,
 };
 
 export const getListGuestsQueryKey = () => qk.guests;
@@ -880,6 +883,7 @@ export function useCheckOut() {
         })
         .eq("id", input.id);
       if (error) throw error;
+      await settlePosRoomChargesForReservation(input.id, supabase);
       if (res.room_id) {
         await supabase
           .from("rooms")
@@ -903,6 +907,7 @@ export function useCheckOut() {
       qc.invalidateQueries({ queryKey: qk.payments });
       qc.invalidateQueries({ queryKey: qk.dashboardSummary });
       qc.invalidateQueries({ queryKey: qk.activity });
+      qc.invalidateQueries({ queryKey: ["pos"] });
     },
   });
 }
@@ -1057,16 +1062,18 @@ export function useCreatePayment() {
       if (error) throw error;
       const { data: res } = await supabase
         .from("reservations")
-        .select("paid_amount")
+        .select("paid_amount, total_amount")
         .eq("id", d.reservationId)
         .single();
+      const nextPaid = Number(res?.paid_amount ?? 0) + Number(d.amount);
       await supabase
         .from("reservations")
         .update({
-          paid_amount: Number(res?.paid_amount ?? 0) + Number(d.amount),
+          paid_amount: nextPaid,
           updated_at: new Date().toISOString(),
         })
         .eq("id", d.reservationId);
+      await settlePosRoomChargesForReservation(d.reservationId, supabase);
       await logActivity(
         "Payment recorded",
         "payment",
@@ -1078,6 +1085,7 @@ export function useCreatePayment() {
       qc.invalidateQueries({ queryKey: qk.payments });
       qc.invalidateQueries({ queryKey: qk.reservations });
       qc.invalidateQueries({ queryKey: qk.activity });
+      qc.invalidateQueries({ queryKey: ["pos"] });
     },
   });
 }
@@ -1653,6 +1661,90 @@ export function useAdminDeleteStudents() {
       qc.invalidateQueries({ queryKey: qk.classroom });
       qc.invalidateQueries({ queryKey: qk.users });
     },
+  });
+}
+
+function invalidateProgressQueries(qc: QueryClient) {
+  qc.invalidateQueries({ queryKey: qk.classroom });
+  qc.invalidateQueries({ queryKey: qk.progressSnapshots });
+  qc.invalidateQueries({ queryKey: qk.guests });
+  qc.invalidateQueries({ queryKey: qk.reservations });
+  qc.invalidateQueries({ queryKey: qk.payments });
+  qc.invalidateQueries({ queryKey: qk.dashboardSummary });
+  qc.invalidateQueries({ queryKey: qk.activity });
+  qc.invalidateQueries({ queryKey: qk.rooms });
+  qc.invalidateQueries({ queryKey: ["pos"] });
+}
+
+export function useAdminProgressSnapshots() {
+  return useQuery({
+    queryKey: qk.progressSnapshots,
+    queryFn: async (): Promise<ProgressSnapshot[]> => {
+      const supabase = createClient();
+      const { data, error } = await supabase.rpc("admin_list_progress_snapshots");
+      if (error) throw error;
+      return ((data ?? []) as Record<string, unknown>[]).map((row) => ({
+        id: String(row.id),
+        createdAt: String(row.created_at ?? ""),
+        createdBy: (row.created_by as string | null) ?? null,
+        createdByName: (row.created_by_name as string | null) ?? null,
+        action: String(row.action ?? "reset"),
+        note: (row.note as string | null) ?? null,
+        userIds: Array.isArray(row.user_ids)
+          ? (row.user_ids as string[]).map(String)
+          : [],
+        userCount: Number(row.user_count ?? 0),
+        summary: (row.summary as ProgressSnapshot["summary"]) ?? {},
+        restoredAt: (row.restored_at as string | null) ?? null,
+        restoredBy: (row.restored_by as string | null) ?? null,
+      }));
+    },
+  });
+}
+
+export function useAdminResetProgress() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input?: {
+      userIds?: string[];
+      resetTour?: boolean;
+      note?: string;
+    }) => {
+      const supabase = createClient();
+      const { data, error } = await supabase.rpc("admin_reset_student_progress", {
+        p_user_ids: input?.userIds?.length ? input.userIds : null,
+        p_reset_tour: input?.resetTour ?? true,
+        p_note: input?.note ?? null,
+      });
+      if (error) throw error;
+      return data as {
+        snapshot_id?: string;
+        users_reset?: number;
+        summary?: unknown;
+        message?: string;
+      };
+    },
+    onSuccess: () => invalidateProgressQueries(qc),
+  });
+}
+
+export function useAdminRestoreProgress() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { snapshotId: string; note?: string }) => {
+      const supabase = createClient();
+      const { data, error } = await supabase.rpc("admin_restore_student_progress", {
+        p_snapshot_id: input.snapshotId,
+        p_note: input.note ?? null,
+      });
+      if (error) throw error;
+      return data as {
+        restored_users?: number;
+        backup_snapshot_id?: string;
+        source_snapshot_id?: string;
+      };
+    },
+    onSuccess: () => invalidateProgressQueries(qc),
   });
 }
 
