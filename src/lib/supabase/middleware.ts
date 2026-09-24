@@ -7,7 +7,11 @@ function isPublicPath(path: string) {
     path === "/login" ||
     path.startsWith("/api/auth/login") ||
     path.startsWith("/_next") ||
-    path === "/favicon.ico"
+    path === "/favicon.ico" ||
+    path === "/sw.js" ||
+    path === "/manifest.webmanifest" ||
+    path === "/manifest.json" ||
+    path.startsWith("/icons/")
   );
 }
 
