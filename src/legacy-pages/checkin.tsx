@@ -61,6 +61,7 @@ import { format, startOfMonth } from "date-fns";
 import {
   ArrowDownRight,
   ArrowUpRight,
+  ClipboardPen,
   FileText,
   Loader2,
   CircleX,
@@ -76,8 +77,11 @@ import {
   ArrowRightLeft,
   CalendarDays,
   CalendarRange,
+  ChevronDown,
   Download,
+  FileImage,
   FileSpreadsheet,
+  FileType2,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useEffect, useMemo, useState, useRef } from "react";
@@ -88,6 +92,11 @@ import { ScrollableTablePane } from "@/components/layout/ScrollableTablePane";
 import { cn } from "@/lib/utils";
 import { countStaySummary } from "@/lib/stays-summary-stats";
 import { contractPaymentSectionHtml, peso, reservationPaymentSummary } from "@/lib/reservation-payment";
+import {
+  buildCheckoutFormHtml,
+  buildGuestRegistrationFormHtml,
+  type GuestStayFormData,
+} from "@/lib/guest-stay-forms";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 
 /* ───────── UI Helpers matching Dashboard style ───────── */
@@ -211,6 +220,12 @@ export default function CheckInOut({ embedded }: CheckInOutProps) {
   const [billQrDataUrl, setBillQrDataUrl] = useState<string>("");
   const [isConsentDialogOpen, setIsConsentDialogOpen] = useState(false);
   const [consentForm, setConsentForm] = useState<any | null>(null);
+  const [isRegistrationDialogOpen, setIsRegistrationDialogOpen] = useState(false);
+  const [registrationForm, setRegistrationForm] = useState<GuestStayFormData | null>(null);
+  const [isCheckoutFormDialogOpen, setIsCheckoutFormDialogOpen] = useState(false);
+  const [checkoutForm, setCheckoutForm] = useState<GuestStayFormData | null>(null);
+  const [registrationLoadingId, setRegistrationLoadingId] = useState<string | null>(null);
+  const [checkoutFormLoadingId, setCheckoutFormLoadingId] = useState<string | null>(null);
 
   const targetReservation = useMemo(
     () => reservations?.find((r) => r.id === targetReservationId) ?? null,
@@ -987,7 +1002,7 @@ export default function CheckInOut({ embedded }: CheckInOutProps) {
     }
   };
 
-  const downloadHtmlAsImage = async (html: string, filename: string, width = 860) => {
+  const renderHtmlToCanvas = async (html: string, width = 860) => {
     const parsed = new DOMParser().parseFromString(html, "text/html");
     const bodyInner = parsed.body?.innerHTML ?? "";
     const styleInner = Array.from(parsed.querySelectorAll("style"))
@@ -1003,8 +1018,7 @@ export default function CheckInOut({ embedded }: CheckInOutProps) {
     container.style.padding = "0";
     container.style.margin = "0";
     container.style.overflow = "visible";
-    
-    // Wrap in a div with explicit padding to ensure margins in the captured image
+
     container.innerHTML = `
       <style>
         ${styleInner}
@@ -1026,19 +1040,12 @@ export default function CheckInOut({ embedded }: CheckInOutProps) {
         await document.fonts.ready.catch(() => {});
       }
       const html2canvas = (await import("html2canvas")).default;
-      const canvas = await html2canvas(container, {
+      return await html2canvas(container, {
         scale: 2,
         useCORS: true,
         backgroundColor: "#ffffff",
         logging: false,
       });
-      const dataUrl = canvas.toDataURL("image/png");
-      const link = document.createElement("a");
-      link.href = dataUrl;
-      link.download = `${filename}.png`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
     } finally {
       try {
         document.body.removeChild(container);
@@ -1046,6 +1053,43 @@ export default function CheckInOut({ embedded }: CheckInOutProps) {
         // ignore
       }
     }
+  };
+
+  const downloadHtmlAsImage = async (html: string, filename: string, width = 860) => {
+    const canvas = await renderHtmlToCanvas(html, width);
+    const dataUrl = canvas.toDataURL("image/png");
+    const link = document.createElement("a");
+    link.href = dataUrl;
+    link.download = `${filename}.png`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const downloadHtmlAsPdf = async (html: string, filename: string, width = 860) => {
+    const canvas = await renderHtmlToCanvas(html, width);
+    const { jsPDF } = await import("jspdf");
+    const imgData = canvas.toDataURL("image/png");
+    const pdf = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const margin = 28;
+    const usableWidth = pageWidth - margin * 2;
+    const imgHeight = (canvas.height * usableWidth) / canvas.width;
+    let heightLeft = imgHeight;
+    let y = margin;
+
+    pdf.addImage(imgData, "PNG", margin, y, usableWidth, imgHeight);
+    heightLeft -= pageHeight - margin * 2;
+
+    while (heightLeft > 0) {
+      y = margin - (imgHeight - heightLeft);
+      pdf.addPage();
+      pdf.addImage(imgData, "PNG", margin, y, usableWidth, imgHeight);
+      heightLeft -= pageHeight - margin * 2;
+    }
+
+    pdf.save(`${filename}.pdf`);
   };
 
   const generateBill = async () => {
@@ -1452,13 +1496,135 @@ export default function CheckInOut({ embedded }: CheckInOutProps) {
     printHtml(buildConsentContractHtml(consentForm));
   };
 
-  const downloadConsentContract = async () => {
+  const handleOpenRegistrationForm = async (id: string) => {
+    setRegistrationLoadingId(id);
+    try {
+      const data = (await contractMutation.mutateAsync({
+        id,
+      })) as GuestStayFormData;
+      setRegistrationForm({
+        ...data,
+        phone: data.phone != null ? String(data.phone) : null,
+        email: data.email != null ? String(data.email) : null,
+        nationality: data.nationality != null ? String(data.nationality) : null,
+        address: data.address != null ? String(data.address) : null,
+        notes: data.notes != null ? String(data.notes) : "",
+        idType: String(data.idType || data.id_type || "Others"),
+        idNumber: String(data.idNumber || data.id_number || ""),
+      });
+      setIsRegistrationDialogOpen(true);
+      toast({
+        title: "Registration form ready",
+        description: "Print or download for the guest to sign and confirm details.",
+      });
+    } catch (error) {
+      toast({
+        title: "Failed to generate registration form",
+        description: error instanceof Error ? error.message : "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setRegistrationLoadingId(null);
+    }
+  };
+
+  const printRegistrationForm = () => {
+    if (!registrationForm) return;
+    printHtml(buildGuestRegistrationFormHtml(registrationForm));
+  };
+
+  const downloadRegistrationForm = async (format: "image" | "pdf") => {
+    if (!registrationForm) return;
+    const html = buildGuestRegistrationFormHtml(registrationForm);
+    const name = `guest-registration-${registrationForm.reservationNumber}`;
+    try {
+      if (format === "pdf") await downloadHtmlAsPdf(html, name, 860);
+      else await downloadHtmlAsImage(html, name, 860);
+      toast({
+        title: format === "pdf" ? "PDF downloaded" : "Image downloaded",
+      });
+    } catch (error) {
+      toast({
+        title: "Download failed",
+        description: error instanceof Error ? error.message : "Please try again.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleOpenCheckoutForm = async (id: string) => {
+    setCheckoutFormLoadingId(id);
+    try {
+      const data = (await billMutation.mutateAsync({
+        id,
+      })) as GuestStayFormData;
+      setCheckoutForm({
+        ...data,
+        phone: data.phone != null ? String(data.phone) : null,
+        email: data.email != null ? String(data.email) : null,
+        nationality: data.nationality != null ? String(data.nationality) : null,
+        address: data.address != null ? String(data.address) : null,
+        notes: data.notes != null ? String(data.notes) : "",
+        idType: String(data.idType || data.id_type || "Others"),
+        idNumber: String(data.idNumber || data.id_number || ""),
+      });
+      setIsCheckoutFormDialogOpen(true);
+      toast({
+        title: "Checkout form ready",
+        description: "Print or download for the guest to sign at departure.",
+      });
+    } catch (error) {
+      toast({
+        title: "Failed to generate checkout form",
+        description: error instanceof Error ? error.message : "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setCheckoutFormLoadingId(null);
+    }
+  };
+
+  const printCheckoutForm = () => {
+    if (!checkoutForm) return;
+    printHtml(buildCheckoutFormHtml(checkoutForm));
+  };
+
+  const downloadCheckoutFormFile = async (format: "image" | "pdf") => {
+    if (!checkoutForm) return;
+    const html = buildCheckoutFormHtml(checkoutForm);
+    const name = `guest-checkout-${checkoutForm.reservationNumber}`;
+    try {
+      if (format === "pdf") await downloadHtmlAsPdf(html, name, 860);
+      else await downloadHtmlAsImage(html, name, 860);
+      toast({
+        title: format === "pdf" ? "PDF downloaded" : "Image downloaded",
+      });
+    } catch (error) {
+      toast({
+        title: "Download failed",
+        description: error instanceof Error ? error.message : "Please try again.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const downloadConsentContract = async (format: "image" | "pdf" = "image") => {
     if (!consentForm) return;
-    await downloadHtmlAsImage(
-      buildConsentContractHtml({ ...consentForm }),
-      `consent-contract-${consentForm.reservationNumber}`,
-      860,
-    );
+    const html = buildConsentContractHtml({ ...consentForm });
+    const name = `consent-contract-${consentForm.reservationNumber}`;
+    try {
+      if (format === "pdf") await downloadHtmlAsPdf(html, name, 860);
+      else await downloadHtmlAsImage(html, name, 860);
+      toast({
+        title: format === "pdf" ? "PDF downloaded" : "Image downloaded",
+      });
+    } catch (error) {
+      toast({
+        title: "Download failed",
+        description: error instanceof Error ? error.message : "Please try again.",
+        variant: "destructive",
+      });
+    }
   };
 
   return (
@@ -1616,6 +1782,20 @@ export default function CheckInOut({ embedded }: CheckInOutProps) {
                           variant="outline"
                           size="sm"
                           type="button"
+                          onClick={() => void handleOpenRegistrationForm(res.id)}
+                          disabled={
+                            registrationLoadingId === res.id || contractMutation.isPending
+                          }
+                          className="h-8 rounded-md px-3 text-xs"
+                          title="Guest Registration Form for signature"
+                        >
+                          <ClipboardPen className="w-3.5 h-3.5 mr-1.5" />
+                          {registrationLoadingId === res.id ? "…" : "Reg. Form"}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          type="button"
                           onClick={() => handleGenerateConsentContract(res.id)}
                           disabled={contractMutation.isPending}
                           className="h-8 rounded-md px-3 text-xs"
@@ -1728,6 +1908,20 @@ export default function CheckInOut({ embedded }: CheckInOutProps) {
                           className="h-8 border-blue-200 text-blue-700 hover:bg-blue-50 px-3 text-xs"
                         >
                           Check Out
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => void handleOpenCheckoutForm(res.id)}
+                          disabled={
+                            checkoutFormLoadingId === res.id || billMutation.isPending
+                          }
+                          className="h-8 rounded-md px-3 text-xs"
+                          title="Checkout Form for signature"
+                        >
+                          <ClipboardPen className="w-3.5 h-3.5 mr-1.5" />
+                          {checkoutFormLoadingId === res.id ? "…" : "Checkout Form"}
                         </Button>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
@@ -2148,7 +2342,7 @@ export default function CheckInOut({ embedded }: CheckInOutProps) {
       </AlertDialog>
 
       <Dialog open={isCheckInDialogOpen} onOpenChange={setIsCheckInDialogOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="w-[calc(100vw-2rem)] max-w-md sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Check-in Time</DialogTitle>
             <DialogDescription>
@@ -2192,23 +2386,43 @@ export default function CheckInOut({ embedded }: CheckInOutProps) {
             )}
           </div>
 
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setIsCheckInDialogOpen(false)}
-            >
-              Cancel
-            </Button>
-            <Button type="button" onClick={confirmCheckIn} disabled={checkInMutation.isPending}>
-              {checkInMutation.isPending ? "Saving..." : "Confirm Check-in"}
-            </Button>
+          <DialogFooter className="gap-2 sm:flex-col sm:space-x-0">
+            {targetReservationId ? (
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                onClick={() => void handleOpenRegistrationForm(targetReservationId)}
+                disabled={contractMutation.isPending}
+              >
+                <ClipboardPen className="mr-1.5 h-3.5 w-3.5" />
+                Guest Registration Form
+              </Button>
+            ) : null}
+            <div className="flex w-full flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full sm:w-auto"
+                onClick={() => setIsCheckInDialogOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                className="w-full sm:w-auto"
+                onClick={confirmCheckIn}
+                disabled={checkInMutation.isPending}
+              >
+                {checkInMutation.isPending ? "Saving..." : "Confirm Check-in"}
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
       <Dialog open={isCheckOutDialogOpen} onOpenChange={setIsCheckOutDialogOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="w-[calc(100vw-2rem)] max-w-md sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Check-out Time</DialogTitle>
             <DialogDescription>
@@ -2325,9 +2539,21 @@ export default function CheckInOut({ embedded }: CheckInOutProps) {
                     <span>Balance Due</span>
                     <span>{getCurrencySymbol(generatedBill.currency)}{Number(generatedBill.balance).toFixed(2)}</span>
                   </div>
-                  <div className="flex gap-2 pt-1">
+                  <div className="flex flex-wrap gap-2 pt-1">
                     <Button type="button" size="sm" variant="outline" onClick={printBill}>Print Bill</Button>
                     <Button type="button" size="sm" variant="outline" onClick={downloadBill}>Download Bill</Button>
+                    {targetReservationId ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => void handleOpenCheckoutForm(targetReservationId)}
+                        disabled={billMutation.isPending}
+                      >
+                        <ClipboardPen className="mr-1 h-3.5 w-3.5" />
+                        Checkout Form
+                      </Button>
+                    ) : null}
                   </div>
                 </div>
               )}
@@ -2344,6 +2570,174 @@ export default function CheckInOut({ embedded }: CheckInOutProps) {
             </Button>
             <Button type="button" onClick={confirmCheckOut} disabled={checkOutMutation.isPending}>
               {checkOutMutation.isPending ? "Saving..." : "Confirm Check-out"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isRegistrationDialogOpen} onOpenChange={setIsRegistrationDialogOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Guest Registration Form</DialogTitle>
+            <DialogDescription>
+              Download or print for the guest to review reservation details and sign at
+              check-in.
+            </DialogDescription>
+          </DialogHeader>
+          {registrationForm ? (
+            <div className="space-y-3 rounded-lg border border-border/70 bg-muted/20 p-3 text-sm">
+              <div className="font-semibold">{registrationForm.guestName}</div>
+              <div className="text-xs text-muted-foreground font-mono">
+                {registrationForm.reservationNumber}
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div>
+                  <span className="text-muted-foreground">Room:</span>{" "}
+                  {registrationForm.roomNumber} ({registrationForm.roomType})
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Phone:</span>{" "}
+                  {registrationForm.phone || "—"}
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Check-in:</span>{" "}
+                  {registrationForm.checkInDate}
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Check-out:</span>{" "}
+                  {registrationForm.checkOutDate}
+                </div>
+                <div className="col-span-2">
+                  <span className="text-muted-foreground">ID:</span>{" "}
+                  {String(registrationForm.idType ?? "—")}{" "}
+                  {String(registrationForm.idNumber ?? "").trim()
+                    ? `· ${registrationForm.idNumber}`
+                    : ""}
+                </div>
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                Form includes guest details, stay dates, payment summary, and signature
+                lines for the guest and front desk.
+              </p>
+            </div>
+          ) : (
+            <Skeleton className="h-32 w-full" />
+          )}
+          <DialogFooter>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={!registrationForm}
+                >
+                  <Download className="mr-1.5 h-3.5 w-3.5" />
+                  Download
+                  <ChevronDown className="ml-1 h-3.5 w-3.5 opacity-70" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem
+                  onClick={() => void downloadRegistrationForm("image")}
+                >
+                  <FileImage className="mr-2 h-4 w-4" />
+                  Image (PNG)
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => void downloadRegistrationForm("pdf")}
+                >
+                  <FileType2 className="mr-2 h-4 w-4" />
+                  PDF
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button
+              type="button"
+              onClick={printRegistrationForm}
+              disabled={!registrationForm}
+            >
+              Print
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isCheckoutFormDialogOpen} onOpenChange={setIsCheckoutFormDialogOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Guest Checkout Form</DialogTitle>
+            <DialogDescription>
+              Download or print for the guest to acknowledge charges and sign at
+              departure.
+            </DialogDescription>
+          </DialogHeader>
+          {checkoutForm ? (
+            <div className="space-y-3 rounded-lg border border-border/70 bg-muted/20 p-3 text-sm">
+              <div className="font-semibold">{checkoutForm.guestName}</div>
+              <div className="text-xs text-muted-foreground font-mono">
+                {checkoutForm.reservationNumber}
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div>
+                  <span className="text-muted-foreground">Room:</span>{" "}
+                  {checkoutForm.roomNumber} ({checkoutForm.roomType})
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Balance:</span>{" "}
+                  {peso(
+                    Number(
+                      checkoutForm.balance ??
+                        Math.max(
+                          0,
+                          Number(checkoutForm.totalAmount ?? 0) -
+                            Number(checkoutForm.paidAmount ?? 0),
+                        ),
+                    ),
+                  )}
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Check-in:</span>{" "}
+                  {checkoutForm.checkInDate}
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Check-out:</span>{" "}
+                  {checkoutForm.checkOutDate}
+                </div>
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                Form includes guest/stay details, charges settlement, checkout
+                acknowledgement, and signature lines.
+              </p>
+            </div>
+          ) : (
+            <Skeleton className="h-32 w-full" />
+          )}
+          <DialogFooter>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button type="button" variant="outline" disabled={!checkoutForm}>
+                  <Download className="mr-1.5 h-3.5 w-3.5" />
+                  Download
+                  <ChevronDown className="ml-1 h-3.5 w-3.5 opacity-70" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem
+                  onClick={() => void downloadCheckoutFormFile("image")}
+                >
+                  <FileImage className="mr-2 h-4 w-4" />
+                  Image (PNG)
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => void downloadCheckoutFormFile("pdf")}
+                >
+                  <FileType2 className="mr-2 h-4 w-4" />
+                  PDF
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button type="button" onClick={printCheckoutForm} disabled={!checkoutForm}>
+              Print
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2530,9 +2924,29 @@ export default function CheckInOut({ embedded }: CheckInOutProps) {
             </div>
           )}
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={downloadConsentContract} disabled={!consentForm}>
-              Download
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button type="button" variant="outline" disabled={!consentForm}>
+                  <Download className="mr-1.5 h-3.5 w-3.5" />
+                  Download
+                  <ChevronDown className="ml-1 h-3.5 w-3.5 opacity-70" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem
+                  onClick={() => void downloadConsentContract("image")}
+                >
+                  <FileImage className="mr-2 h-4 w-4" />
+                  Image (PNG)
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => void downloadConsentContract("pdf")}
+                >
+                  <FileType2 className="mr-2 h-4 w-4" />
+                  PDF
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <Button type="button" onClick={printConsentContract} disabled={!consentForm}>
               Print
             </Button>

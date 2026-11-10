@@ -13,7 +13,9 @@ import { Loader2 } from "lucide-react";
 import type { User as AuthUser } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@/lib/api-client";
+import { isActivationExpired } from "@/lib/activation-expiry";
 import {
+  ACCOUNT_EXPIRED_MESSAGE,
   ACCOUNT_INACTIVE_MESSAGE,
   stashLoginError,
 } from "@/lib/auth-messages";
@@ -88,6 +90,18 @@ function sessionWasReplaced(profile: { session_nonce?: string | null } | null) {
   return storedSessionNonce() !== expected;
 }
 
+async function deactivateExpiredProfile(userId: string) {
+  const supabase = createClient();
+  await supabase
+    .from("profiles")
+    .update({
+      is_active: false,
+      activation_expires_at: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", userId);
+}
+
 /** Load profile for a known auth user. Does not call auth.getUser/getSession. */
 async function loadProfileForUser(authUser: AuthUser): Promise<User | null> {
   const supabase = createClient();
@@ -96,6 +110,21 @@ async function loadProfileForUser(authUser: AuthUser): Promise<User | null> {
     .select("*")
     .eq("id", authUser.id)
     .maybeSingle();
+
+  if (
+    profile &&
+    isActivationExpired(
+      (profile as { activation_expires_at?: string | null }).activation_expires_at,
+    )
+  ) {
+    await deactivateExpiredProfile(authUser.id);
+    stashLoginError(ACCOUNT_EXPIRED_MESSAGE);
+    clearStoredSessionNonce();
+    setTimeout(() => {
+      void createClient().auth.signOut();
+    }, 0);
+    return null;
+  }
 
   if (profile && profile.is_active === false) {
     stashLoginError(ACCOUNT_INACTIVE_MESSAGE);
@@ -197,9 +226,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!authUser) return;
       const { data: profile } = await supabase
         .from("profiles")
-        .select("session_nonce, is_active")
+        .select("session_nonce, is_active, activation_expires_at")
         .eq("id", authUser.id)
         .maybeSingle();
+      if (
+        isActivationExpired(
+          (profile as { activation_expires_at?: string | null } | null)
+            ?.activation_expires_at,
+        )
+      ) {
+        await deactivateExpiredProfile(authUser.id);
+        stashLoginError(ACCOUNT_EXPIRED_MESSAGE);
+        clearStoredSessionNonce();
+        setUserState(null);
+        redirectToLoginIfNeeded(router);
+        setTimeout(() => {
+          void createClient().auth.signOut();
+        }, 0);
+        return;
+      }
       if (profile?.is_active === false) {
         stashLoginError(ACCOUNT_INACTIVE_MESSAGE);
         clearStoredSessionNonce();

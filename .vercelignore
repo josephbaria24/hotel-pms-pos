@@ -1,0 +1,7 @@
+.open-next
+.wrangler
+electron
+dist
+node_modules
+*.md
+cloudflare-env.d.ts

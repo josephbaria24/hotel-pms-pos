@@ -10,6 +10,7 @@ import {
   useAdminResetProgress,
   useAdminRestoreProgress,
   useAdminUpdateStudent,
+  useBulkCreateUsers,
   useOperationMode,
   useSetOperationMode,
   type ClassroomUser,
@@ -21,6 +22,14 @@ import { ScrollableTablePane } from "@/components/layout/ScrollableTablePane";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -40,13 +49,22 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
+import {
+  ACTIVATION_DURATION_UNITS,
+  computeActivationExpiresAt,
+  formatActivationExpiry,
+  type ActivationDurationUnit,
+} from "@/lib/activation-expiry";
 import { cn } from "@/lib/utils";
 import {
   ArrowDown,
   ArrowUp,
   Building2,
   CheckCircle2,
+  ClipboardPaste,
   GraduationCap,
   History,
   Power,
@@ -57,8 +75,82 @@ import {
   Shield,
   Trash2,
   Undo2,
+  UserPlus,
   X,
 } from "lucide-react";
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+/** Common domains people paste without "@" (e.g. namegmail.com → name@gmail.com). */
+const MISSING_AT_DOMAINS = [
+  "gmail.com",
+  "yahoo.com",
+  "outlook.com",
+  "hotmail.com",
+  "icloud.com",
+  "live.com",
+  "msn.com",
+];
+
+function stripListPrefix(token: string) {
+  // "16.email@…" or "16)email@…" or "16-email@…"
+  return token.replace(/^\d+[.)\-:]*/, "");
+}
+
+/** Fix missing @ before a known domain: angel…gmail.com → angel…@gmail.com */
+function healMissingAt(token: string): string | null {
+  if (token.includes("@")) return null;
+  for (const domain of MISSING_AT_DOMAINS) {
+    if (token.endsWith(domain) && token.length > domain.length) {
+      const local = token.slice(0, -domain.length);
+      if (/^[a-z0-9._+-]+$/i.test(local)) return `${local}@${domain}`;
+    }
+  }
+  return null;
+}
+
+type ParsedPasteEmails = {
+  emails: string[];
+  /** Original → healed (missing @ fixed) */
+  healed: { from: string; to: string }[];
+  /** Tokens that looked like emails but were invalid */
+  skipped: string[];
+};
+
+/** Split pasted text into unique lowercased emails (comma / space / newline / ;). */
+function parsePastedEmails(raw: string): ParsedPasteEmails {
+  const parts = raw
+    .split(/[\s,;]+/g)
+    .map((p) => stripListPrefix(p.trim().toLowerCase()))
+    .filter(Boolean)
+    // drop pure list numbers like "16."
+    .filter((p) => !/^\d+$/.test(p));
+
+  const emails: string[] = [];
+  const healed: { from: string; to: string }[] = [];
+  const skipped: string[] = [];
+  const seen = new Set<string>();
+
+  for (const part of parts) {
+    let email = part;
+    if (!EMAIL_RE.test(email)) {
+      const fixed = healMissingAt(part);
+      if (fixed && EMAIL_RE.test(fixed)) {
+        healed.push({ from: part, to: fixed });
+        email = fixed;
+      } else if (part.includes("@") || /gmail|yahoo|outlook|hotmail|\.com$/i.test(part)) {
+        skipped.push(part);
+        continue;
+      } else {
+        continue;
+      }
+    }
+    if (seen.has(email)) continue;
+    seen.add(email);
+    emails.push(email);
+  }
+
+  return { emails, healed, skipped };
+}
 
 function hasPracticeActivity(s: ClassroomUser) {
   return s.reservationsCount > 0 || s.paymentsCount > 0 || s.posOrdersCount > 0;
@@ -158,9 +250,16 @@ function StudentRow({
         </Badge>
       </TableCell>
       <TableCell>
-        <Badge variant={student.isActive ? "outline" : "destructive"}>
-          {student.isActive ? "Active" : "Inactive"}
-        </Badge>
+        <div className="flex flex-col gap-0.5">
+          <Badge variant={student.isActive ? "outline" : "destructive"}>
+            {student.isActive ? "Active" : "Inactive"}
+          </Badge>
+          {student.isActive && student.activationExpiresAt ? (
+            <span className="text-[10px] text-muted-foreground">
+              Until {formatActivationExpiry(student.activationExpiresAt)}
+            </span>
+          ) : null}
+        </div>
       </TableCell>
       <TableCell>
         <Badge variant={student.onboardingCompleted ? "outline" : "secondary"}>
@@ -223,6 +322,7 @@ export default function AdminClassroomPage() {
   const deleteStudents = useAdminDeleteStudents();
   const resetProgress = useAdminResetProgress();
   const restoreProgress = useAdminRestoreProgress();
+  const bulkCreateUsers = useBulkCreateUsers();
   const {
     data: progressHistory,
     isLoading: historyLoading,
@@ -241,6 +341,18 @@ export default function AdminClassroomPage() {
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [pasteEmailsOpen, setPasteEmailsOpen] = useState(false);
+  const [pasteEmailsRaw, setPasteEmailsRaw] = useState("");
+  const [createMissingPassword, setCreateMissingPassword] = useState("");
+  const [createMissingActive, setCreateMissingActive] = useState(true);
+  const [activateDialog, setActivateDialog] = useState<{
+    ids: string[];
+    label: string;
+  } | null>(null);
+  const [activateLimitEnabled, setActivateLimitEnabled] = useState(false);
+  const [activateAmount, setActivateAmount] = useState("1");
+  const [activateUnit, setActivateUnit] =
+    useState<ActivationDurationUnit>("days");
 
   const isAdmin = user?.role === "admin";
   const busy =
@@ -249,7 +361,41 @@ export default function AdminClassroomPage() {
     deleteStudents.isPending ||
     setOperationMode.isPending ||
     resetProgress.isPending ||
-    restoreProgress.isPending;
+    restoreProgress.isPending ||
+    bulkCreateUsers.isPending;
+
+  const parsedPaste = useMemo(
+    () => parsePastedEmails(pasteEmailsRaw),
+    [pasteEmailsRaw],
+  );
+  const parsedEmails = parsedPaste.emails;
+
+  const pasteMatch = useMemo(() => {
+    const list = data ?? [];
+    const byEmail = new Map<string, ClassroomUser>();
+    for (const s of list) {
+      const email = (s.email ?? "").trim().toLowerCase();
+      if (email) byEmail.set(email, s);
+    }
+    const matched: ClassroomUser[] = [];
+    const unmatched: string[] = [];
+    const seenIds = new Set<string>();
+    for (const email of parsedEmails) {
+      const hit = byEmail.get(email);
+      if (hit) {
+        if (!seenIds.has(hit.id)) {
+          seenIds.add(hit.id);
+          matched.push(hit);
+        }
+      } else {
+        unmatched.push(email);
+      }
+    }
+    const actionableIds = matched
+      .map((s) => s.id)
+      .filter((id) => id !== user?.id);
+    return { matched, unmatched, actionableIds };
+  }, [data, parsedEmails, user?.id]);
   const isShared = operationMode === "shared";
 
   const students = useMemo(() => {
@@ -365,7 +511,11 @@ export default function AdminClassroomPage() {
 
   async function patchOne(
     id: string,
-    data: { isActive?: boolean; onboardingCompleted?: boolean },
+    data: {
+      isActive?: boolean;
+      onboardingCompleted?: boolean;
+      activationExpiresAt?: string | null;
+    },
     okMessage: string,
   ) {
     try {
@@ -380,16 +530,96 @@ export default function AdminClassroomPage() {
     }
   }
 
+  function openActivateDialog(ids: string[], label: string) {
+    const cleaned = ids.filter((id) => id !== user?.id);
+    if (cleaned.length === 0) {
+      toast({
+        title: "Nothing to activate",
+        description: "No accounts available for this action.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setActivateLimitEnabled(false);
+    setActivateAmount("1");
+    setActivateUnit("days");
+    setActivateDialog({ ids: cleaned, label });
+  }
+
+  async function confirmActivate() {
+    if (!activateDialog) return;
+    const { ids } = activateDialog;
+    let activationExpiresAt: string | null = null;
+    if (activateLimitEnabled) {
+      const expires = computeActivationExpiresAt({
+        amount: Number(activateAmount),
+        unit: activateUnit,
+      });
+      if (!expires) {
+        toast({
+          title: "Invalid duration",
+          description: "Enter a whole number of 1 or more.",
+          variant: "destructive",
+        });
+        return;
+      }
+      activationExpiresAt = expires.toISOString();
+    }
+
+    try {
+      if (ids.length === 1) {
+        await updateStudent.mutateAsync({
+          id: ids[0],
+          isActive: true,
+          activationExpiresAt,
+        });
+      } else {
+        await bulkUpdate.mutateAsync({
+          ids,
+          isActive: true,
+          activationExpiresAt,
+        });
+      }
+      setActivateDialog(null);
+      clearSelection();
+      toast({
+        title: `Activated ${ids.length} account(s)`,
+        description: activationExpiresAt
+          ? `Expires ${formatActivationExpiry(activationExpiresAt)}`
+          : "No expiration set",
+      });
+    } catch (err) {
+      toast({
+        title: "Activate failed",
+        description: err instanceof Error ? err.message : "Try again.",
+        variant: "destructive",
+      });
+    }
+  }
+
   async function runBulk(
     action: "activate" | "deactivate" | "tour" | "delete",
+    idOverride?: string[],
   ) {
-    const ids = [...selected].filter((id) => id !== user?.id);
+    const ids = (idOverride ?? [...selected]).filter((id) => id !== user?.id);
     if (ids.length === 0) {
       toast({
         title: "Nothing selected",
-        description: "Select one or more students first.",
+        description: idOverride
+          ? "No matched accounts available for this action."
+          : "Select one or more students first.",
         variant: "destructive",
       });
+      return;
+    }
+
+    if (action === "activate") {
+      openActivateDialog(
+        ids,
+        ids.length === 1
+          ? "Activate account"
+          : `Activate ${ids.length} accounts`,
+      );
       return;
     }
 
@@ -411,11 +641,12 @@ export default function AdminClassroomPage() {
         return;
       }
 
-      if (action === "activate") {
-        await bulkUpdate.mutateAsync({ ids, isActive: true });
-        toast({ title: `Activated ${ids.length} account(s)` });
-      } else if (action === "deactivate") {
-        await bulkUpdate.mutateAsync({ ids, isActive: false });
+      if (action === "deactivate") {
+        await bulkUpdate.mutateAsync({
+          ids,
+          isActive: false,
+          activationExpiresAt: null,
+        });
         toast({
           title: `Deactivated ${ids.length} account(s)`,
           description: "They cannot log in until activated again.",
@@ -424,7 +655,7 @@ export default function AdminClassroomPage() {
         await bulkUpdate.mutateAsync({ ids, onboardingCompleted: true });
         toast({ title: `Marked tour done for ${ids.length} student(s)` });
       }
-      clearSelection();
+      if (!idOverride) clearSelection();
     } catch (err) {
       toast({
         title: "Action failed",
@@ -434,26 +665,110 @@ export default function AdminClassroomPage() {
     }
   }
 
-  async function runResetProgress(scope: "selected" | "all_staff") {
+  function selectMatchedInTable() {
+    const ids = pasteMatch.actionableIds;
+    if (ids.length === 0) {
+      toast({
+        title: "No matched accounts",
+        description: "Capture emails first, or none of them are in the classroom list.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setSelected(new Set(ids));
+    setPasteEmailsOpen(false);
+    toast({
+      title: `Selected ${ids.length} account${ids.length === 1 ? "" : "s"}`,
+      description: "Use the bulk action bar on the classroom table.",
+    });
+  }
+
+  async function createMissingAccounts() {
+    const emails = pasteMatch.unmatched;
+    if (emails.length === 0) {
+      toast({
+        title: "Nothing to create",
+        description: "All pasted emails already match classroom accounts.",
+        variant: "destructive",
+      });
+      return;
+    }
+    const password = createMissingPassword.trim();
+    if (password.length < 6) {
+      toast({
+        title: "Password required",
+        description: "Set a password of at least 6 characters for the new accounts.",
+        variant: "destructive",
+      });
+      return;
+    }
+    const ok = window.confirm(
+      `Create ${emails.length} staff account${emails.length === 1 ? "" : "s"} with the same password?\n\n` +
+        emails.slice(0, 8).join("\n") +
+        (emails.length > 8 ? `\n…and ${emails.length - 8} more` : ""),
+    );
+    if (!ok) return;
+
+    try {
+      const result = await bulkCreateUsers.mutateAsync({
+        paste: emails.join("\n"),
+        samePassword: true,
+        password,
+        role: "staff",
+        isActive: createMissingActive,
+      });
+      await refetch();
+      toast({
+        title: `Created ${result.created} account${result.created === 1 ? "" : "s"}`,
+        description:
+          result.failed > 0
+            ? `${result.failed} failed — ${result.failures
+                .slice(0, 2)
+                .map((f) => f.message)
+                .join("; ")}`
+            : "They now appear under Matched. You can activate/deactivate from here.",
+      });
+      if (result.created > 0) setCreateMissingPassword("");
+    } catch (err) {
+      toast({
+        title: "Could not create accounts",
+        description:
+          err instanceof Error
+            ? err.message
+            : "Check SUPABASE_SERVICE_ROLE_KEY is set for the app.",
+        variant: "destructive",
+      });
+    }
+  }
+
+  async function runResetProgress(
+    scope: "selected" | "all_staff",
+    idOverride?: string[],
+  ) {
     const ids =
-      scope === "selected"
+      idOverride?.filter((id) => id !== user?.id) ??
+      (scope === "selected"
         ? [...selected].filter((id) => id !== user?.id)
-        : (data ?? []).filter((s) => s.role === "staff").map((s) => s.id);
+        : (data ?? []).filter((s) => s.role === "staff").map((s) => s.id));
 
     if (ids.length === 0) {
       toast({
-        title: scope === "selected" ? "Nothing selected" : "No staff accounts",
+        title:
+          scope === "selected" || idOverride
+            ? "Nothing selected"
+            : "No staff accounts",
         description:
-          scope === "selected"
-            ? "Select one or more students first."
+          scope === "selected" || idOverride
+            ? "Select or match one or more students first."
             : "There are no staff/student accounts to reset.",
         variant: "destructive",
       });
       return;
     }
 
-    const label =
-      scope === "selected"
+    const label = idOverride
+      ? `${ids.length} matched account${ids.length === 1 ? "" : "s"}`
+      : scope === "selected"
         ? `${ids.length} selected account${ids.length === 1 ? "" : "s"}`
         : `all ${ids.length} staff/student account${ids.length === 1 ? "" : "s"}`;
 
@@ -469,12 +784,13 @@ export default function AdminClassroomPage() {
       const result = await resetProgress.mutateAsync({
         userIds: ids,
         resetTour: true,
-        note:
-          scope === "selected"
+        note: idOverride
+          ? `Reset pasted emails (${ids.length})`
+          : scope === "selected"
             ? `Reset selected (${ids.length})`
             : `Reset all staff (${ids.length})`,
       });
-      clearSelection();
+      if (!idOverride) clearSelection();
       toast({
         title: `Progress reset for ${result.users_reset ?? ids.length} account(s)`,
         description: "Saved to Progress history — you can restore anytime.",
@@ -795,6 +1111,15 @@ export default function AdminClassroomPage() {
           <Button
             size="sm"
             variant="outline"
+            disabled={busy}
+            onClick={() => setPasteEmailsOpen(true)}
+          >
+            <ClipboardPaste className="h-3.5 w-3.5" />
+            Paste emails
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
             disabled={busy || selected.size === 0}
             onClick={() => void runBulk("activate")}
           >
@@ -969,12 +1294,15 @@ export default function AdminClassroomPage() {
                     }}
                     busy={busy}
                     onActivate={() =>
-                      void patchOne(student.id, { isActive: true }, "Student activated")
+                      openActivateDialog(
+                        [student.id],
+                        `Activate ${student.fullName || student.email || "account"}`,
+                      )
                     }
                     onDeactivate={() =>
                       void patchOne(
                         student.id,
-                        { isActive: false },
+                        { isActive: false, activationExpiresAt: null },
                         "Student deactivated — cannot log in",
                       )
                     }
@@ -1153,6 +1481,363 @@ export default function AdminClassroomPage() {
           </div>
         )}
       </div>
+
+      <Dialog
+        open={activateDialog != null}
+        onOpenChange={(open) => {
+          if (!open) setActivateDialog(null);
+        }}
+      >
+        <DialogContent className="w-[calc(100vw-2rem)] max-w-md">
+          <DialogHeader>
+            <DialogTitle>{activateDialog?.label ?? "Activate"}</DialogTitle>
+            <DialogDescription>
+              Optionally limit how long these accounts stay active. Leave unlimited
+              if they should remain active until you deactivate them.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-1">
+            <label className="flex items-start gap-2 text-sm">
+              <Checkbox
+                checked={activateLimitEnabled}
+                onCheckedChange={(v) => setActivateLimitEnabled(v === true)}
+                className="mt-0.5"
+              />
+              <span>
+                Set activation expiration
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  After this period they cannot log in until activated again.
+                </span>
+              </span>
+            </label>
+
+            {activateLimitEnabled ? (
+              <div className="flex flex-wrap items-end gap-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="activate-amount" className="text-xs">
+                    Duration
+                  </Label>
+                  <Input
+                    id="activate-amount"
+                    type="number"
+                    min={1}
+                    step={1}
+                    inputMode="numeric"
+                    value={activateAmount}
+                    onChange={(e) => setActivateAmount(e.target.value)}
+                    className="h-9 w-24"
+                  />
+                </div>
+                <div className="min-w-[8.5rem] flex-1 space-y-1.5">
+                  <Label className="text-xs">Unit</Label>
+                  <Select
+                    value={activateUnit}
+                    onValueChange={(v) =>
+                      setActivateUnit(v as ActivationDurationUnit)
+                    }
+                  >
+                    <SelectTrigger className="h-9">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {ACTIVATION_DURATION_UNITS.map((u) => (
+                        <SelectItem key={u.value} value={u.value}>
+                          <SelectItemText>{u.label}</SelectItemText>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            ) : null}
+
+            {activateLimitEnabled ? (
+              <p className="text-xs text-muted-foreground">
+                {(() => {
+                  const expires = computeActivationExpiresAt({
+                    amount: Number(activateAmount),
+                    unit: activateUnit,
+                  });
+                  return expires
+                    ? `Expires around ${formatActivationExpiry(expires.toISOString())}`
+                    : "Enter a whole number of 1 or more.";
+                })()}
+              </p>
+            ) : null}
+          </div>
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={busy}
+              onClick={() => setActivateDialog(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={busy}
+              onClick={() => void confirmActivate()}
+            >
+              <Power className="h-3.5 w-3.5" />
+              Activate
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={pasteEmailsOpen} onOpenChange={setPasteEmailsOpen}>
+        <DialogContent className="w-[calc(100vw-2rem)] max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Paste emails</DialogTitle>
+            <DialogDescription>
+              Paste a list of student emails (commas, spaces, or new lines). Matches
+              update as you paste — then activate, deactivate, or other bulk actions.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <Textarea
+              value={pasteEmailsRaw}
+              onChange={(e) => setPasteEmailsRaw(e.target.value)}
+              placeholder={
+                "student1@school.edu\nstudent2@school.edu, student3@school.edu"
+              }
+              className="min-h-[140px] font-mono text-xs"
+              autoFocus
+            />
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs text-muted-foreground">
+                {pasteEmailsRaw.trim()
+                  ? parsedEmails.length > 0
+                    ? `${parsedEmails.length} email${parsedEmails.length === 1 ? "" : "s"} detected · updates as you paste`
+                    : "No valid emails detected yet — keep pasting or typing"
+                  : "Paste a list — emails are detected automatically"}
+              </p>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                disabled={!pasteEmailsRaw}
+                onClick={() => setPasteEmailsRaw("")}
+              >
+                Clear
+              </Button>
+            </div>
+
+            {parsedPaste.healed.length > 0 || parsedPaste.skipped.length > 0 ? (
+              <div className="space-y-1.5 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs">
+                {parsedPaste.healed.map((h) => (
+                  <p key={h.from} className="text-amber-800 dark:text-amber-200">
+                    Fixed missing @:{" "}
+                    <span className="font-mono">{h.from}</span>
+                    {" → "}
+                    <span className="font-mono font-medium">{h.to}</span>
+                  </p>
+                ))}
+                {parsedPaste.skipped.map((s) => (
+                  <p key={s} className="text-destructive">
+                    Skipped (invalid email):{" "}
+                    <span className="font-mono">{s}</span>
+                  </p>
+                ))}
+              </div>
+            ) : null}
+
+            {parsedEmails.length > 0 ? (
+              <div className="space-y-3 rounded-lg border border-border/70 bg-muted/20 p-3">
+                <div className="flex flex-wrap gap-2 text-xs">
+                  <Badge variant="secondary">
+                    {parsedEmails.length} captured
+                  </Badge>
+                  <Badge variant="outline" className="border-emerald-500/40 text-emerald-700 dark:text-emerald-300">
+                    {pasteMatch.matched.length} matched
+                  </Badge>
+                  {pasteMatch.unmatched.length > 0 ? (
+                    <Badge variant="outline" className="border-amber-500/40 text-amber-700 dark:text-amber-300">
+                      {pasteMatch.unmatched.length} not found
+                    </Badge>
+                  ) : null}
+                  {parsedPaste.skipped.length > 0 ? (
+                    <Badge variant="destructive">
+                      {parsedPaste.skipped.length} invalid
+                    </Badge>
+                  ) : null}
+                </div>
+
+                {pasteMatch.matched.length > 0 ? (
+                  <div className="max-h-40 space-y-1 overflow-y-auto rounded-md border border-border/60 bg-background p-2 text-xs">
+                    {pasteMatch.matched.map((s) => (
+                      <div
+                        key={s.id}
+                        className="flex items-center justify-between gap-2 border-b border-border/40 py-1 last:border-0"
+                      >
+                        <div className="min-w-0">
+                          <div className="truncate font-medium">{s.fullName || "—"}</div>
+                          <div className="truncate text-muted-foreground">
+                            {s.email || s.username}
+                          </div>
+                        </div>
+                        <Badge
+                          variant={s.isActive ? "outline" : "destructive"}
+                          className="shrink-0 text-[10px]"
+                        >
+                          {s.isActive ? "Active" : "Inactive"}
+                        </Badge>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    No classroom accounts match these emails yet.
+                  </p>
+                )}
+
+                {pasteMatch.unmatched.length > 0 ? (
+                  <details className="text-xs" open>
+                    <summary className="cursor-pointer font-medium text-foreground">
+                      Not found ({pasteMatch.unmatched.length}) — create accounts
+                    </summary>
+                    <div className="mt-2 space-y-3 rounded-md border border-amber-500/30 bg-amber-500/5 p-3">
+                      <ul className="max-h-28 list-inside list-disc overflow-y-auto font-mono text-muted-foreground">
+                        {pasteMatch.unmatched.map((email) => (
+                          <li key={email}>{email}</li>
+                        ))}
+                      </ul>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="create-missing-password" className="text-xs">
+                          Shared password for new accounts
+                        </Label>
+                        <Input
+                          id="create-missing-password"
+                          type="text"
+                          autoComplete="off"
+                          placeholder="Min. 6 characters"
+                          value={createMissingPassword}
+                          onChange={(e) => setCreateMissingPassword(e.target.value)}
+                          className="h-9 font-mono text-xs"
+                        />
+                        <p className="text-[11px] text-muted-foreground">
+                          Names/usernames are derived from each email. Role: staff.
+                        </p>
+                      </div>
+                      <label className="flex items-center gap-2 text-xs">
+                        <Checkbox
+                          checked={createMissingActive}
+                          onCheckedChange={(v) => setCreateMissingActive(v === true)}
+                        />
+                        Activate accounts after create (can log in)
+                      </label>
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="w-full sm:w-auto"
+                        disabled={
+                          busy || createMissingPassword.trim().length < 6
+                        }
+                        onClick={() => void createMissingAccounts()}
+                      >
+                        {bulkCreateUsers.isPending ? (
+                          <>Creating…</>
+                        ) : (
+                          <>
+                            <UserPlus className="h-3.5 w-3.5" />
+                            Create {pasteMatch.unmatched.length} account
+                            {pasteMatch.unmatched.length === 1 ? "" : "s"}
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  </details>
+                ) : null}
+
+                <div className="flex flex-wrap gap-2 border-t border-border/60 pt-3">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={busy || pasteMatch.actionableIds.length === 0}
+                    onClick={selectMatchedInTable}
+                  >
+                    Select in table
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={busy || pasteMatch.actionableIds.length === 0}
+                    onClick={() =>
+                      void runBulk("activate", pasteMatch.actionableIds)
+                    }
+                  >
+                    <Power className="h-3.5 w-3.5" />
+                    Activate
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={busy || pasteMatch.actionableIds.length === 0}
+                    onClick={() =>
+                      void runBulk("deactivate", pasteMatch.actionableIds)
+                    }
+                  >
+                    <PowerOff className="h-3.5 w-3.5" />
+                    Deactivate
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={busy || pasteMatch.actionableIds.length === 0}
+                    onClick={() => void runBulk("tour", pasteMatch.actionableIds)}
+                  >
+                    <CheckCircle2 className="h-3.5 w-3.5" />
+                    Mark tour done
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="border-amber-500/40 text-amber-700 hover:bg-amber-500/10 dark:text-amber-400"
+                    disabled={busy || pasteMatch.actionableIds.length === 0}
+                    onClick={() =>
+                      void runResetProgress("selected", pasteMatch.actionableIds)
+                    }
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    Reset progress
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="destructive"
+                    disabled={busy || pasteMatch.actionableIds.length === 0}
+                    onClick={() =>
+                      void runBulk("delete", pasteMatch.actionableIds)
+                    }
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Delete
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setPasteEmailsOpen(false)}
+            >
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

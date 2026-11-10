@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
-import { ACCOUNT_INACTIVE_MESSAGE } from "@/lib/auth-messages";
+import { isActivationExpired } from "@/lib/activation-expiry";
+import {
+  ACCOUNT_EXPIRED_MESSAGE,
+  ACCOUNT_INACTIVE_MESSAGE,
+} from "@/lib/auth-messages";
 import { SESSION_NONCE_COOKIE, nonceCookieOptions } from "@/lib/auth-session";
 
 export async function POST(request: Request) {
@@ -34,13 +38,31 @@ export async function POST(request: Request) {
   const userId = signInData.user.id;
   const { data: profile, error: profileError } = await supabase
     .from("profiles")
-    .select("is_active")
+    .select("is_active, activation_expires_at")
     .eq("id", userId)
     .maybeSingle();
 
   if (profileError) {
     await supabase.auth.signOut();
     return NextResponse.json({ error: profileError.message }, { status: 400 });
+  }
+
+  const expired = isActivationExpired(
+    (profile as { activation_expires_at?: string | null } | null)
+      ?.activation_expires_at,
+  );
+
+  if (expired) {
+    await supabase
+      .from("profiles")
+      .update({
+        is_active: false,
+        activation_expires_at: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", userId);
+    await supabase.auth.signOut();
+    return NextResponse.json({ error: ACCOUNT_EXPIRED_MESSAGE }, { status: 403 });
   }
 
   if (!profile || profile.is_active === false) {

@@ -74,6 +74,7 @@ export async function PATCH(request: Request) {
     password?: string;
     role?: string;
     isActive?: boolean;
+    activationExpiresAt?: string | null;
   } | null;
 
   const id = String(body?.id ?? "").trim();
@@ -91,6 +92,8 @@ export async function PATCH(request: Request) {
   const role =
     body?.role === "admin" ? "admin" : body?.role === "staff" ? "staff" : undefined;
   const isActive = body?.isActive;
+  const activationExpiresAt =
+    body && "activationExpiresAt" in body ? body.activationExpiresAt : undefined;
 
   if (email && !EMAIL_RE.test(email)) {
     return NextResponse.json({ error: "Enter a valid email address." }, { status: 400 });
@@ -134,7 +137,18 @@ export async function PATCH(request: Request) {
   if (fullName) profilePatch.full_name = fullName;
   if (username) profilePatch.username = username;
   if (role) profilePatch.role = role;
-  if (typeof isActive === "boolean") profilePatch.is_active = isActive;
+  if (typeof isActive === "boolean") {
+    profilePatch.is_active = isActive;
+    if (isActive === false && activationExpiresAt === undefined) {
+      profilePatch.activation_expires_at = null;
+    }
+  }
+  if (activationExpiresAt !== undefined) {
+    profilePatch.activation_expires_at =
+      activationExpiresAt == null || activationExpiresAt === ""
+        ? null
+        : String(activationExpiresAt);
+  }
   if (password) profilePatch.login_password = password;
 
   const { error: profileError } = await service

@@ -967,6 +967,13 @@ export function useGetReservationContractData() {
         paidAmount: Number(res.paid_amount ?? 0),
         paymentMethod: methods.join(", ") || null,
         notes: res.notes,
+        actualCheckInAt: res.actual_check_in_at
+          ? String(res.actual_check_in_at)
+          : null,
+        actualCheckOutAt: res.actual_check_out_at
+          ? String(res.actual_check_out_at)
+          : null,
+        status: String(res.status ?? ""),
       };
     },
   });
@@ -981,7 +988,7 @@ export function useGetReservationBillData() {
           supabase.from("settings").select("*").limit(1).maybeSingle(),
           supabase
             .from("reservations")
-            .select(`*, guests (*), rooms ( room_number, type )`)
+            .select(`*, guests (*), rooms ( room_number, type, rate )`)
             .eq("id", input.id)
             .single(),
         ]);
@@ -993,6 +1000,17 @@ export function useGetReservationBillData() {
           : null;
         const total = Number(res.total_amount ?? 0);
         const paid = Number(res.paid_amount ?? 0);
+        const { data: pays } = await supabase
+          .from("payments")
+          .select("method")
+          .eq("reservation_id", input.id);
+        const methods = [
+          ...new Set(
+            (pays ?? [])
+              .map((p) => String(p.method ?? "").trim())
+              .filter(Boolean),
+          ),
+        ];
         return {
           currency: s?.currency ?? "Peso",
           balance: Math.max(0, total - paid),
@@ -1002,13 +1020,29 @@ export function useGetReservationBillData() {
           hotelAddress: s?.address ?? "",
           hotelContactNumber: s?.contactNumber ?? "",
           guestName: `${g.first_name ?? ""} ${g.last_name ?? ""}`.trim(),
+          phone: g.phone,
+          email: g.email,
+          nationality: g.nationality,
+          idType: g.id_type,
+          idNumber: g.id_number,
+          address: g.address,
           roomNumber: room.room_number,
           roomType: room.type,
+          roomRate: Number(room.rate ?? 0),
           checkInDate: String(res.check_in_date).slice(0, 10),
           checkOutDate: String(res.check_out_date).slice(0, 10),
           adults: res.adults,
           children: res.children,
           totalAmount: total,
+          paymentMethod: methods.join(", ") || null,
+          notes: res.notes,
+          actualCheckInAt: res.actual_check_in_at
+            ? String(res.actual_check_in_at)
+            : null,
+          actualCheckOutAt: res.actual_check_out_at
+            ? String(res.actual_check_out_at)
+            : null,
+          status: String(res.status ?? ""),
         };
       })();
       return contract;
@@ -1565,6 +1599,8 @@ export function useAdminClassroom() {
         isActive: Boolean(row.is_active ?? true),
         onboardingCompleted: Boolean(row.onboarding_completed),
         createdAt: String(row.created_at ?? ""),
+        activationExpiresAt:
+          (row.activation_expires_at as string | null | undefined) ?? null,
         roomsCount: Number(row.rooms_count ?? 0),
         guestsCount: Number(row.guests_count ?? 0),
         reservationsCount: Number(row.reservations_count ?? 0),
@@ -1585,6 +1621,8 @@ export function useAdminUpdateStudent() {
       role?: string;
       isActive?: boolean;
       onboardingCompleted?: boolean;
+      /** ISO string, or null to clear (unlimited / deactivated) */
+      activationExpiresAt?: string | null;
     }) => {
       const supabase = createClient();
       const patch: Record<string, unknown> = {
@@ -1594,6 +1632,9 @@ export function useAdminUpdateStudent() {
       if (input.isActive !== undefined) patch.is_active = input.isActive;
       if (input.onboardingCompleted !== undefined) {
         patch.onboarding_completed = input.onboardingCompleted;
+      }
+      if (input.activationExpiresAt !== undefined) {
+        patch.activation_expires_at = input.activationExpiresAt;
       }
       const { error } = await supabase
         .from("profiles")
@@ -1615,6 +1656,8 @@ export function useAdminBulkUpdateStudents() {
       ids: string[];
       isActive?: boolean;
       onboardingCompleted?: boolean;
+      /** ISO string, or null to clear (unlimited / deactivated) */
+      activationExpiresAt?: string | null;
     }) => {
       if (input.ids.length === 0) return;
       const supabase = createClient();
@@ -1624,6 +1667,9 @@ export function useAdminBulkUpdateStudents() {
       if (input.isActive !== undefined) patch.is_active = input.isActive;
       if (input.onboardingCompleted !== undefined) {
         patch.onboarding_completed = input.onboardingCompleted;
+      }
+      if (input.activationExpiresAt !== undefined) {
+        patch.activation_expires_at = input.activationExpiresAt;
       }
       const { error } = await supabase
         .from("profiles")

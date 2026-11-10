@@ -20,6 +20,8 @@ export type ClassroomUser = {
   isActive: boolean;
   onboardingCompleted: boolean;
   createdAt: string;
+  /** ISO timestamp; null means unlimited while active */
+  activationExpiresAt: string | null;
   roomsCount: number;
   guestsCount: number;
   reservationsCount: number;

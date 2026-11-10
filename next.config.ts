@@ -1,7 +1,6 @@
 import type { NextConfig } from "next";
 import path from "path";
 import { fileURLToPath } from "url";
-import { initOpenNextCloudflareForDev } from "@opennextjs/cloudflare";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -35,4 +34,9 @@ const nextConfig: NextConfig = {
 
 export default nextConfig;
 
-initOpenNextCloudflareForDev();
+// Cloudflare OpenNext local binding — skip on Vercel / CI builds
+if (!process.env.VERCEL && !process.env.CI) {
+  void import("@opennextjs/cloudflare").then(({ initOpenNextCloudflareForDev }) => {
+    initOpenNextCloudflareForDev();
+  });
+}
