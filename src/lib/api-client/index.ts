@@ -315,20 +315,62 @@ export function useListRooms() {
   });
 }
 
+function roomCreateErrorMessage(error: { code?: string; message?: string }) {
+  const code = String(error.code ?? "");
+  const message = String(error.message ?? "");
+  if (code === "23505" || /duplicate key|unique constraint/i.test(message)) {
+    return "That room number already exists on your account. Choose a different number.";
+  }
+  if (code === "42501" || /row-level security|permission denied/i.test(message)) {
+    return "You do not have permission to add rooms right now. Ask an admin to check account activation and lab mode.";
+  }
+  return message || "Could not create room.";
+}
+
 export function useCreateRoom() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (payload: CreateRoomPayload) => {
       const supabase = createClient();
+      const roomNumber = String(payload.roomNumber ?? "").trim();
+      if (!roomNumber) {
+        throw new Error("Room number is required.");
+      }
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user?.id) {
+        throw new Error("You must be signed in to add a room.");
+      }
+
+      const { data: existingOwnRows, error: existingErr } = await supabase
+        .from("rooms")
+        .select("id, room_number")
+        .eq("tenant_id", user.id);
+      if (existingErr) throw new Error(roomCreateErrorMessage(existingErr));
+      const roomNumberKey = roomNumber.toLowerCase();
+      const alreadyOwns = (existingOwnRows ?? []).some(
+        (row) =>
+          String((row as { room_number?: string }).room_number ?? "")
+            .trim()
+            .toLowerCase() === roomNumberKey,
+      );
+      if (alreadyOwns) {
+        throw new Error(
+          "That room number already exists on your account. Choose a different number.",
+        );
+      }
+
       const { error } = await supabase.from("rooms").insert({
         id: newId(),
-        room_number: payload.roomNumber,
+        tenant_id: user.id,
+        room_number: roomNumber,
         type: payload.type,
         capacity: payload.capacity,
         rate: payload.pricePerNight,
         status: payload.status ?? "available",
       });
-      if (error) throw error;
+      if (error) throw new Error(roomCreateErrorMessage(error));
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.rooms }),
   });

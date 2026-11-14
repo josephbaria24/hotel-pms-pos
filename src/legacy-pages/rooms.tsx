@@ -901,9 +901,18 @@ export default function Rooms() {
   };
 
   const handleCreateRoom = async () => {
+    const roomNumber = newRoom.roomNumber.trim();
+    if (!roomNumber) {
+      toast({
+        title: "Room number required",
+        description: "Enter a room number before creating.",
+        variant: "destructive",
+      });
+      return;
+    }
     try {
       await createRoomMutation.mutateAsync({
-        roomNumber: newRoom.roomNumber,
+        roomNumber,
         type: newRoom.type,
         capacity: Number(newRoom.capacity) || 1,
         pricePerNight: Number(newRoom.pricePerNight) || 0,
